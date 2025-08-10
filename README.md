@@ -39,6 +39,7 @@
    source venv/bin/activate
    
    # 패키지 설치
+   cd backend
    pip install -r requirements.txt
    ```
 
