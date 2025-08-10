@@ -175,4 +175,28 @@ print(response.json())
 - git remote add origin https://github.com/moon4656/stt_service.git
 - git push -u origin main
 
+# 향후 변경사항 푸시:
+- git add .
+- git commit -m "커밋 메시지"
+- git push
+
+# 브랜치 확인:
+- git branch
+- git branch -a
+
+# 브랜치 생성:
+- git branch <브랜치명>
+
+# 브랜치 변경:
+- git checkout <브랜치명>
+
+# 브랜치 병합:
+- git checkout <병합할 브랜치>
+- git merge <병합할 브랜치>
+- git branch -d <병합된 브랜치>
+
+# 원격 브랜치 삭제:
+- git branch -r -d origin/<브랜치명>
+- git push origin --delete <브랜치명>
+
 MIT
