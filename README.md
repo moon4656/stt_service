@@ -168,11 +168,11 @@ print(response.json())
 
 ## GITHUB   
 # 프로젝트 루트 디렉토리에서
-git init
-git add .
-git commit -m "Initial commit: STT project with FastAPI, Vue3, PostgreSQL"
-git branch -M main
-git remote add origin https://github.com/moon4656/stt_service.git
-git push -u origin main
+- git init
+- git add .
+- git commit -m "Initial commit: STT project with FastAPI, Vue3, PostgreSQL"
+- git branch -M main
+- git remote add origin https://github.com/moon4656/stt_service.git
+- git push -u origin main
 
 MIT
