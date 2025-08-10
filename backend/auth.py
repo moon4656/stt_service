@@ -8,7 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import json
 import os
 from sqlalchemy.orm import Session
-from database import User, get_db
+from database import User, APIToken, get_db
 import bcrypt
 
 # JWT 설정
@@ -37,11 +37,21 @@ def verify_password(password: str, hashed_password: str) -> bool:
 
 class TokenManager:
     @staticmethod
-    def generate_api_key(user_id: str, token_id: str, description: str = "") -> Dict:
+    def generate_api_key(user_id: str, token_id: str, description: str = "", db: Session = None) -> Dict:
         """사용자별 API 키 생성"""
-        # 동일한 token_id가 이미 존재하는지 확인
-        for existing_token in tokens_db.values():
-            if existing_token.get("token_id") == token_id and existing_token["user_id"] == user_id:
+        if db is None:
+            # 기존 메모리 기반 로직 유지 (하위 호환성)
+            for existing_token in tokens_db.values():
+                if existing_token.get("token_id") == token_id and existing_token["user_id"] == user_id:
+                    raise ValueError(f"Token ID '{token_id}' already exists for this user")
+        else:
+            # 데이터베이스에서 중복 확인
+            existing_token = db.query(APIToken).filter(
+                APIToken.user_id == user_id,
+                APIToken.token_id == token_id,
+                APIToken.is_active == True
+            ).first()
+            if existing_token:
                 raise ValueError(f"Token ID '{token_id}' already exists for this user")
         
         # API 키 생성 (32바이트 랜덤 문자열)
@@ -50,19 +60,35 @@ class TokenManager:
         # API 키 해시 (저장용)
         api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
         
-        # 토큰 정보
+        # 현재 시간
+        created_at = datetime.datetime.utcnow()
+        
+        if db is not None:
+            # 데이터베이스에 토큰 저장
+            db_token = APIToken(
+                user_id=user_id,
+                token_id=token_id,
+                token_key=api_key_hash,
+                token_name=description,
+                is_active=True,
+                created_at=created_at
+            )
+            db.add(db_token)
+            db.commit()
+            db.refresh(db_token)
+        
+        # 메모리에도 저장 (기존 로직과의 호환성)
         token_info = {
             "api_key_hash": api_key_hash,
             "token_id": token_id,
             "user_id": user_id,
             "description": description,
-            "created_at": datetime.datetime.utcnow().isoformat(),
+            "created_at": created_at.isoformat(),
             "is_active": True,
             "usage_count": 0,
             "last_used": None
         }
         
-        # 토큰 저장
         tokens_db[api_key_hash] = token_info
         
         # 히스토리 저장
@@ -71,7 +97,7 @@ class TokenManager:
             "api_key_hash": api_key_hash,
             "token_id": token_id,
             "user_id": user_id,
-            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "timestamp": created_at.isoformat(),
             "description": description
         })
         
@@ -81,18 +107,77 @@ class TokenManager:
             "token_id": token_id,
             "user_id": user_id,
             "description": description,
-            "created_at": token_info["created_at"],
+            "created_at": created_at.isoformat(),
             "is_active": True
         }
     
     @staticmethod
-    def verify_api_key(api_key: str) -> Optional[Dict]:
-        """API 키 검증"""
+    def verify_api_key(api_key: str, db: Session = None) -> Optional[Dict]:
+        """API 키 검증 (데이터베이스 우선)"""
         api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
         
+        if db is not None:
+            # 데이터베이스에서 토큰 검증
+            db_token = db.query(APIToken).filter(
+                APIToken.token_key == api_key_hash,
+                APIToken.is_active == True
+            ).first()
+            
+            if db_token:
+                # 마지막 사용 시간 업데이트
+                db_token.last_used_at = datetime.datetime.utcnow()
+                db.commit()
+                
+                return {
+                    "user_id": db_token.user_id,
+                    "token_id": db_token.token_id,
+                    "token_name": db_token.token_name,
+                    "created_at": db_token.created_at.isoformat(),
+                    "last_used_at": db_token.last_used_at.isoformat() if db_token.last_used_at else None,
+                    "is_active": db_token.is_active
+                }
+            return None
+        
+        # 메모리 기반 검증 (하위 호환성)
         token_info = tokens_db.get(api_key_hash)
         if not token_info or not token_info["is_active"]:
             return None
+    
+    @staticmethod
+    def get_user_tokens(user_id: str, db: Session = None) -> List[Dict]:
+        """사용자의 모든 토큰 조회"""
+        tokens = []
+        
+        if db is not None:
+            # 데이터베이스에서 토큰 조회
+            db_tokens = db.query(APIToken).filter(
+                APIToken.user_id == user_id,
+                APIToken.is_active == True
+            ).order_by(APIToken.created_at.desc()).all()
+            
+            for token in db_tokens:
+                tokens.append({
+                    "token_id": token.token_id,
+                    "token_name": token.token_name,
+                    "created_at": token.created_at.isoformat(),
+                    "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
+                    "is_active": token.is_active
+                })
+        
+        # 메모리에서도 조회 (기존 로직과의 호환성)
+        for token_hash, token_info in tokens_db.items():
+            if token_info["user_id"] == user_id and token_info["is_active"]:
+                # 데이터베이스에서 이미 조회된 토큰과 중복 방지
+                if db is None or not any(t["token_id"] == token_info["token_id"] for t in tokens):
+                    tokens.append({
+                        "token_id": token_info["token_id"],
+                        "token_name": token_info["description"],
+                        "created_at": token_info["created_at"],
+                        "last_used_at": token_info["last_used"],
+                        "is_active": token_info["is_active"]
+                    })
+        
+        return tokens
 
 def authenticate_user(user_id: str, password: str, db: Session = None) -> Optional[Dict]:
     """사용자 인증 (패스워드 검증)"""
@@ -214,12 +299,12 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-def verify_api_key_dependency(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """API 키 검증 의존성"""
+def verify_api_key_dependency(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    """API 키 검증 의존성 (데이터베이스 기반)"""
     # Bearer 토큰에서 API 키 추출
     api_key = credentials.credentials
     
-    token_info = TokenManager.verify_api_key(api_key)
+    token_info = TokenManager.verify_api_key(api_key, db)
     if not token_info:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

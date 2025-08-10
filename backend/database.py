@@ -86,6 +86,33 @@ class APIUsageLog(Base):
     user_agent = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+class LoginLog(Base):
+    """사용자 로그인 기록 테이블"""
+    __tablename__ = "login_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(100), nullable=False, index=True)
+    login_time = Column(DateTime(timezone=True), server_default=func.now())
+    ip_address = Column(String(45), nullable=True)  # IPv4/IPv6
+    user_agent = Column(String(500), nullable=True)
+    success = Column(Boolean, nullable=False, default=True)  # 로그인 성공 여부
+    failure_reason = Column(String(255), nullable=True)  # 실패 사유 (실패시에만)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class APIToken(Base):
+    """API 토큰 테이블"""
+    __tablename__ = "api_tokens"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(100), nullable=False, index=True)  # User.user_id 참조
+    token_id = Column(String(100), unique=True, nullable=False, index=True)  # 토큰 식별자
+    token_key = Column(String(255), nullable=False)  # 실제 API 키 (해시화됨)
+    token_name = Column(String(100), nullable=True)  # 토큰 이름 (사용자가 지정)
+    is_active = Column(Boolean, default=True)  # 토큰 활성화 상태
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)  # 마지막 사용 시간
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # 만료 시간 (선택사항)
+
 # 데이터베이스 세션 의존성
 def get_db():
     db = SessionLocal()

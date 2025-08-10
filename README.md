@@ -199,4 +199,13 @@ print(response.json())
 - git branch -r -d origin/<브랜치명>
 - git push origin --delete <브랜치명>
 
+# 서버 8001 포트 확인
+- netstat -an | findstr :8001
+
+# 서버 8001 포트 종료
+- taskkill /f /pid <PID>
+
+# uvicorn 서버 실행
+- uvicorn app:app --host 0.0.0.0 --port 8001 --reload
+
 MIT
