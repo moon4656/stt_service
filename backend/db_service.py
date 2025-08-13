@@ -3,15 +3,85 @@ from database import TranscriptionRequest, TranscriptionResponse, APIUsageLog
 from typing import Optional, Dict, List
 import json
 import time
+import logging
 from datetime import datetime, timezone
+
+# Logger 설정
+logger = logging.getLogger(__name__)
 
 class TranscriptionService:
     """음성 변환 관련 데이터베이스 서비스"""
     
-    @staticmethod
-    def create_request(db: Session, user_id: Optional[str], filename: str, 
-                      file_size: int, file_extension: str) -> TranscriptionRequest:
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def create_request(self, filename: str, file_size: int, 
+                      service_requested: Optional[str] = None,
+                      fallback_enabled: bool = True,
+                      client_ip: Optional[str] = None,
+                      user_agent: Optional[str] = None) -> TranscriptionRequest:
         """새로운 음성 변환 요청을 생성합니다."""
+        file_extension = filename.split('.')[-1] if '.' in filename else ''
+        request = TranscriptionRequest(
+            user_id=None,  # API 키 기반에서는 user_id가 없을 수 있음
+            filename=filename,
+            file_size=file_size,
+            file_extension=file_extension,
+            status="processing"
+        )
+        self.db.add(request)
+        self.db.commit()
+        self.db.refresh(request)
+        return request
+    
+    def create_response(self, request_id: int, transcription_text: str,
+                       summary_text: Optional[str] = None,
+                       service_used: str = "",
+                       processing_time: float = 0.0,
+                       duration: float = 0.0,
+                       success: bool = True,
+                       error_message: Optional[str] = None,
+                       service_provider: str = "",
+                       audio_duration_minutes: float = 0.0,
+                       tokens_used: float = 0.0,
+                       response_data: Optional[str] = None,
+                       confidence_score: Optional[float] = None,
+                       language_detected: Optional[str] = None) -> TranscriptionResponse:
+        """음성 변환 응답을 저장합니다 (새로운 컬럼들 포함)."""
+
+        logger.info(f"✅ transcription_text ============================== {transcription_text}")
+
+        word_count = len(transcription_text.split()) if transcription_text else 0
+        
+        logger.info(f"✅ word_count ============================== {word_count}")
+        logger.info(f"✅ audio_duration_minutes ============================== {audio_duration_minutes}")
+        
+        response = TranscriptionResponse(
+            request_id=request_id,
+            transcribed_text=transcription_text,
+            summary_text=summary_text,
+            confidence_score=confidence_score,
+            language_detected=language_detected,
+            duration=duration,
+            word_count=word_count,
+            response_data=response_data,
+            service_provider=service_provider,
+            audio_duration_minutes=audio_duration_minutes,
+            tokens_used=tokens_used
+        )
+        logger.info(f"✅ response Test ============================== 1")
+        
+        logger.info(f"✅ response ============================== {response}")
+        
+        self.db.add(response)
+        self.db.commit()
+        self.db.refresh(response)
+        return response
+    
+    @staticmethod
+    def create_request_static(db: Session, user_id: Optional[str], filename: str, 
+                      file_size: int, file_extension: str) -> TranscriptionRequest:
+        """새로운 음성 변환 요청을 생성합니다 (기존 호환성용)."""
         request = TranscriptionRequest(
             user_id=user_id,
             filename=filename,
@@ -47,7 +117,7 @@ class TranscriptionService:
             db.commit()
     
     @staticmethod
-    def create_response(db: Session, request_id: int, daglo_response: Dict, 
+    def create_response_from_daglo(db: Session, request_id: int, daglo_response: Dict, 
                        summary_text: Optional[str] = None) -> TranscriptionResponse:
         """음성 변환 응답을 저장합니다."""
         # Daglo 응답에서 필요한 정보 추출
@@ -56,6 +126,8 @@ class TranscriptionService:
         language_detected = None
         duration = None
         word_count = 0
+        
+        logger.info(f"✅ daglo_response ============================== {daglo_response}")
         
         # Daglo API 응답 구조에 따라 데이터 추출 (sttResults.transcript 우선)
         if 'sttResults' in daglo_response and daglo_response['sttResults']:
@@ -69,7 +141,11 @@ class TranscriptionService:
         elif "text" in daglo_response:
             transcribed_text = daglo_response["text"]
         
+        logger.info(f"✅ daglo_response transcribed_text ============================== {transcribed_text}")
+        
         word_count = len(transcribed_text.split()) if transcribed_text else 0
+        
+        logger.info(f"✅ daglo_response word_count ============================== {word_count}")
         
         if "confidence" in daglo_response:
             confidence_score = daglo_response["confidence"]
@@ -80,6 +156,8 @@ class TranscriptionService:
         if "duration" in daglo_response:
             duration = daglo_response["duration"]
         
+        logger.info(f"✅ daglo_response test ============================== 001")
+        
         response = TranscriptionResponse(
             request_id=request_id,
             transcribed_text=transcribed_text,
@@ -88,8 +166,11 @@ class TranscriptionService:
             language_detected=language_detected,
             duration=duration,
             word_count=word_count,
-            daglo_response_data=json.dumps(daglo_response, ensure_ascii=False)
+            response_data=json.dumps(daglo_response, ensure_ascii=False)
         )
+        
+        logger.info(f"✅ daglo_response test ============================== 002")
+        logger.info(f"✅ daglo_response response ============================== {response}")
         
         db.add(response)
         db.commit()
@@ -127,13 +208,38 @@ class TranscriptionService:
 class APIUsageService:
     """API 사용 로그 관련 서비스"""
     
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def log_usage(self, user_id: Optional[str], endpoint: str, method: str, 
+                  status_code: int, processing_time: Optional[float] = None,
+                  client_ip: Optional[str] = None, user_agent: Optional[str] = None,
+                  api_key_hash: Optional[str] = None,
+                  request_size: Optional[int] = None, response_size: Optional[int] = None):
+        """API 사용 로그를 기록합니다."""
+        log = APIUsageLog(
+            user_id=user_id,
+            api_key_hash=api_key_hash,
+            endpoint=endpoint,
+            method=method,
+            status_code=status_code,
+            request_size=request_size,
+            response_size=response_size,
+            processing_time=processing_time,
+            ip_address=client_ip,
+            user_agent=user_agent
+        )
+        
+        self.db.add(log)
+        self.db.commit()
+    
     @staticmethod
     def log_api_usage(db: Session, user_id: Optional[str], api_key_hash: Optional[str],
                      endpoint: str, method: str, status_code: int,
                      request_size: Optional[int] = None, response_size: Optional[int] = None,
                      processing_time: Optional[float] = None, ip_address: Optional[str] = None,
                      user_agent: Optional[str] = None):
-        """API 사용 로그를 기록합니다."""
+        """API 사용 로그를 기록합니다 (기존 호환성용)."""
         log = APIUsageLog(
             user_id=user_id,
             api_key_hash=api_key_hash,

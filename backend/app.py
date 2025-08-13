@@ -28,6 +28,7 @@ from auth import (
 from database import get_db, create_tables, test_connection, TranscriptionRequest, TranscriptionResponse, APIUsageLog, LoginLog, APIToken
 from db_service import TranscriptionService, APIUsageService
 from openai_service import OpenAIService
+from stt_manager import STTManager
 
 # 환경 변수 로드
 load_dotenv()
@@ -104,15 +105,11 @@ def setup_logging():
 # 로깅 초기화
 logger = setup_logging()
 
-# Daglo API 설정 가져오기
-DAGLO_API_KEY = os.getenv("DAGLO_API_KEY")
-DAGLO_API_URL = os.getenv("DAGLO_API_URL", "https://apis.daglo.ai/stt/v1/async/transcripts")
-
-if not DAGLO_API_KEY:
-    raise ValueError("DAGLO_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
-
 # OpenAI 서비스 초기화
 openai_service = OpenAIService()
+
+# STT 매니저 초기화 (여러 STT 서비스 관리)
+stt_manager = STTManager()
 
 # 애플리케이션 생명주기 관리
 @asynccontextmanager
@@ -146,7 +143,7 @@ async def lifespan(app: FastAPI):
 # FastAPI 앱 초기화
 app = FastAPI(
     title="Speech-to-Text Service", 
-    description="Daglo API를 사용한 음성-텍스트 변환 서비스",
+    description="다중 STT 서비스(AssemblyAI, Daglo)를 지원하는 음성-텍스트 변환 서비스",
     lifespan=lifespan
 )
 
@@ -194,12 +191,27 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 @app.post("/transcribe/", summary="음성 파일을 텍스트로 변환")
-async def transcribe_audio(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def transcribe_audio(
+    request: Request, 
+    file: UploadFile = File(...), 
+    service: Optional[str] = None,
+    fallback: bool = True,
+    summarization: bool = False,
+    # summary_model: str = "informative",
+    # summary_type: str = "bullets",
+    db: Session = Depends(get_db)
+):
     """
     음성 파일을 업로드하여 텍스트로 변환합니다.
+    다중 STT 서비스(AssemblyAI, Daglo)를 지원하며 폴백 기능을 제공합니다.
     요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
-    - **file**: 변환할 음성 파일 (지원 형식: mp3, wav, m4a 등)
+    - **file**: 변환할 음성 파일
+    - **service**: 사용할 STT 서비스 (assemblyai, daglo). 미지정시 기본 서비스 사용
+    - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
+    - **summarization**: ChatGPT API 요약 기능 사용 여부 (기본값: False, 모든 서비스에서 지원)
+    - **summary_model**: 사용되지 않음 (ChatGPT API 사용)
+    - **summary_type**: 사용되지 않음 (ChatGPT API 사용)
     """
     
     start_time = time.time()
@@ -211,7 +223,7 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
         
         # 파일 확장자 확인
         file_extension = file.filename.split('.')[-1].lower()
-        supported_formats = ['mp3', 'wav', 'm4a', 'ogg', 'flac', '3gp', '3gpp', 'ac3', 'aac', 'aiff', 'amr', 'au', 'opus', 'ra']
+        supported_formats = stt_manager.get_all_supported_formats()
         
         logger.info(f"📄 파일 확장자: {file_extension}")
         print(f"File extension: {file_extension}")
@@ -255,12 +267,12 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
             logger.info("💾 데이터베이스에 요청 기록 생성 중...")
             print(f"Attempting to create request record...")
             print(f"DB session: {db}")
-            request_record = TranscriptionService.create_request(
-                db=db,
-                user_id='moon4656',  # 익명 사용자
+            transcription_service = TranscriptionService(db)
+            request_record = transcription_service.create_request(
                 filename=file.filename,
                 file_size=file_size,
-                file_extension=file_extension
+                service_requested=service,
+                fallback_enabled=fallback
             )
             logger.info(f"✅ 요청 기록 생성 완료 - ID: {request_record.id}")
             print(f"✅ Created request record with ID: {request_record.id}")
@@ -271,32 +283,36 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
             import traceback
             traceback.print_exc()
         
-        # Daglo API 요청 헤더
-        headers = {
-            "Authorization": f"Bearer {DAGLO_API_KEY}"
-        }
+        # STT 서비스를 사용하여 음성 변환 수행
+        logger.info(f"🚀 STT 변환 시작 - 서비스: {service or '기본값'}, 폴백: {fallback}")
+        print(f"Starting STT transcription - Service: {service or 'default'}, Fallback: {fallback}")
         
-        # 파일 업로드를 위한 파일 객체 생성
-        files = {
-            "file": (file.filename, file_content, f"audio/{file_extension}")
-        }
+        # 요약 기능 파라미터 준비 (ChatGPT API 사용을 위해 제거)
+        extra_params = {}
+        if summarization:
+            logger.info(f"📝 요약 기능 활성화 - ChatGPT API 사용")
         
-        logger.info(f"🚀 Daglo API 호출 시작 - URL: {DAGLO_API_URL}")
+        # STT 매니저를 통해 음성 변환 수행
+        if service:
+            # 특정 서비스 지정
+            if fallback:
+                transcription_result = stt_manager.transcribe_with_fallback(file_content, file.filename, language_code="ko", preferred_service=service, **extra_params)
+            else:
+                transcription_result = stt_manager.transcribe_with_service(service, file_content, file.filename, **extra_params)
+        else:
+            # 기본 서비스 사용
+            if fallback:
+                transcription_result = stt_manager.transcribe_with_fallback(file_content, file.filename, **extra_params)
+            else:
+                transcription_result = stt_manager.transcribe_with_default(file_content, file.filename, **extra_params)
         
-        print(f"Uploading to Daglo API: {DAGLO_API_URL}")
-        print(f"File size: {file_size} bytes")
+        logger.info(f"📡 STT 변환 완료 - 서비스: {transcription_result.get('service_name', 'unknown')}")
+        print(f"STT transcription completed - Service: {transcription_result.get('service_name', 'unknown')}")
         
-        # 1단계: Daglo API에 음성 파일 업로드
-        response = requests.post(DAGLO_API_URL, headers=headers, files=files)
-        
-        logger.info(f"📡 Daglo API 응답 - 상태코드: {response.status_code}")
-        print(f"Daglo API response status: {response.status_code}")
-        print(f"Daglo API response text: {response.text}")
-        
-        # 응답 확인
-        if response.status_code != 200:
-            error_detail = response.text
-            logger.error(f"❌ Daglo API 오류 - 상태코드: {response.status_code}, 내용: {error_detail}")
+        # 변환 실패 확인
+        if transcription_result.get('error'):
+            error_detail = transcription_result.get('error', 'Unknown error')
+            logger.error(f"❌ STT 변환 실패: {error_detail}")
             
             # 요청 실패로 업데이트
             if request_record:
@@ -306,7 +322,7 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
                         db=db,
                         request_id=request_record.id,
                         status="failed",
-                        error_message=f"Daglo API error: {error_detail}"
+                        error_message=f"STT error: {error_detail}"
                     )
                 except Exception as db_error:
                     logger.error(f"❌ 요청 기록 업데이트 실패: {db_error}")
@@ -321,7 +337,7 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
                     api_key_hash=None,
                     endpoint="/transcribe/",
                     method="POST",
-                    status_code=response.status_code,
+                    status_code=500,
                     request_size=file_size,
                     processing_time=time.time() - start_time,
                     ip_address=request.client.host if request.client else None,
@@ -331,14 +347,16 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
                 logger.error(f"❌ API 사용 로그 기록 실패: {log_error}")
                 print(f"Failed to log API usage: {log_error}")
             
-            raise HTTPException(status_code=response.status_code, detail=f"API 호출 실패: {error_detail}")
+            raise HTTPException(status_code=500, detail=f"음성 변환 실패: {error_detail}")
         
-        # RID 추출
-        upload_result = response.json()
-        rid = upload_result.get('rid')
+        # 변환된 텍스트 추출
+        transcribed_text = transcription_result.get('text', '')
         
-        if not rid:
-            logger.error("❌ Daglo API에서 RID를 받지 못함")
+        logger.info(f"✅ transcription_result ============================== {transcription_result}")
+
+        
+        if not transcribed_text:
+            logger.error("❌ 변환된 텍스트가 비어있음")
             # 요청 실패로 업데이트
             if request_record:
                 try:
@@ -347,164 +365,151 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
                         db=db,
                         request_id=request_record.id,
                         status="failed",
-                        error_message="RID not received from Daglo API"
+                        error_message="변환된 텍스트가 비어있음"
                     )
                 except Exception as db_error:
                     logger.error(f"❌ 요청 기록 업데이트 실패: {db_error}")
                     print(f"Failed to update request record: {db_error}")
             
-            raise HTTPException(status_code=500, detail="RID를 받지 못했습니다.")
+            raise HTTPException(status_code=500, detail="변환된 텍스트가 비어있습니다.")
         
-        logger.info(f"✅ RID 수신 성공: {rid}")
+        # 변환 완료
+        processing_time = time.time() - start_time
+        logger.info(f"✅ 변환 완료! 처리 시간: {processing_time:.2f}초")
+        logger.info(f"📝 변환된 텍스트 길이: {len(transcribed_text)}자")
         
-        # RID를 요청 기록에 업데이트
+        # OpenAI 요약 생성 (모든 서비스에서 요약 활성화 시 사용)
+        summary_text = None
+        summary_time = 0.0
+        used_service = transcription_result.get('service_name', '').lower()
+        if transcribed_text and openai_service.is_configured() and summarization:
+            try:
+                summary_start_time = time.time()
+                logger.info(f"🤖 OpenAI 요약 생성 시작 ({used_service} 서비스)")
+                summary_text = await openai_service.summarize_text(transcribed_text)
+                summary_time = time.time() - summary_start_time
+                logger.info(f"✅ 요약 생성 완료: {len(summary_text) if summary_text else 0}자, 소요시간: {summary_time:.2f}초")
+                print(f"Summary generated successfully: {len(summary_text) if summary_text else 0} characters, time: {summary_time:.2f}s")
+            except Exception as summary_error:
+                logger.error(f"❌ 요약 생성 실패: {summary_error}")
+                print(f"Failed to generate summary: {summary_error}")
+        
+        # 요청 완료로 업데이트
         if request_record:
             try:
-                logger.info(f"💾 RID 업데이트 중 - ID: {request_record.id}, RID: {rid}")
-                TranscriptionService.update_request_with_rid(db=db, request_id=request_record.id, daglo_rid=rid)
-            except Exception as db_error:
-                logger.error(f"❌ RID 업데이트 실패: {db_error}")
-                print(f"Failed to update RID: {db_error}")
-        
-        # 2단계: RID로 결과 조회 (폴링)
-        result_url = f"{DAGLO_API_URL}/{rid}"
-        max_attempts = 30  # 최대 30번 시도 (약 5분)
-        
-        logger.info(f"🔄 변환 결과 폴링 시작 - URL: {result_url}, 최대 시도: {max_attempts}회")
-        
-        for attempt in range(max_attempts):
-            logger.info(f"🔄 폴링 시도 {attempt + 1}/{max_attempts}")
-            result_response = requests.get(result_url, headers=headers)
-            
-            if result_response.status_code == 200:
-                result_data = result_response.json()
-                status = result_data.get('status')
-                logger.info(f"📊 변환 상태: {status}")
-                
-                if status == 'transcribed':
-                    # 변환 완료
-                    processing_time = time.time() - start_time
-                    logger.info(f"✅ 변환 완료! 처리 시간: {processing_time:.2f}초")
-                    
-                    # STT 텍스트 추출
-                    transcribed_text = ""
-                    if 'sttResults' in result_data and result_data['sttResults']:
-                        stt_results = result_data['sttResults']
-                        if isinstance(stt_results, list) and len(stt_results) > 0:
-                            # sttResults가 리스트인 경우 첫 번째 요소에서 transcript 추출
-                            transcribed_text = stt_results[0].get('transcript', '') if isinstance(stt_results[0], dict) else ''
-                        elif isinstance(stt_results, dict):
-                            # sttResults가 딕셔너리인 경우
-                            transcribed_text = stt_results.get('transcript', '')
-                    else:
-                        transcribed_text = result_data.get('text', '')
-                    
-                    logger.info(f"📝 변환된 텍스트 길이: {len(transcribed_text)}자")
-                    
-                    # OpenAI 요약 생성
-                    summary_text = None
-                    if transcribed_text and openai_service.is_configured():
-                        try:
-                            logger.info("🤖 OpenAI 요약 생성 시작")
-                            summary_text = await openai_service.summarize_text(transcribed_text)
-                            logger.info(f"✅ 요약 생성 완료: {len(summary_text) if summary_text else 0}자")
-                            print(f"Summary generated successfully: {len(summary_text) if summary_text else 0} characters")
-                        except Exception as summary_error:
-                            logger.error(f"❌ 요약 생성 실패: {summary_error}")
-                            print(f"Failed to generate summary: {summary_error}")
-                    
-                    # 요청 완료로 업데이트
-                    if request_record:
-                        try:
-                            logger.info(f"💾 요청 완료 처리 중 - ID: {request_record.id}")
-                            TranscriptionService.complete_request(
-                                db=db,
-                                request_id=request_record.id,
-                                status="completed"
-                            )
-                            logger.info("✅ 요청 완료 처리 성공")
-                            
-                            # 응답 데이터 저장 (요약 포함)
-                            TranscriptionService.create_response(
-                                db=db,
-                                request_id=request_record.id,
-                                daglo_response=result_data,
-                                summary_text=summary_text
-                            )
-                        except Exception as db_error:
-                            print(f"Failed to save response: {db_error}")
-                    
-                    # 응답 데이터 구성 (사용자 정보 포함)
-                    response_data = {
-                        "user_id": None,  # 현재 인증되지 않은 사용자
-                        "email": None,    # 현재 인증되지 않은 사용자
-                        "stt_message": transcribed_text,
-                        "stt_summary": summary_text,
-                        "original_response": result_data
-                    }
-                    
-                    # API 사용 로그 기록 (성공)
-                    try:
-                        response_size = len(json.dumps(response_data).encode('utf-8'))
-                        APIUsageService.log_api_usage(
-                            db=db,
-                            user_id=None,
-                            api_key_hash=None,
-                            endpoint="/transcribe/",
-                            method="POST",
-                            status_code=200,
-                            request_size=file_size,
-                            response_size=response_size,
-                            processing_time=processing_time,
-                            ip_address=request.client.host if request.client else None,
-                            user_agent=request.headers.get("user-agent")
-                        )
-                    except Exception as log_error:
-                        print(f"Failed to log API usage: {log_error}")
-                    
-                    return JSONResponse(content=response_data)
-                    
-                elif status in ['failed', 'error']:
-                    # 변환 실패
-                    logger.error(f"❌ Daglo 변환 실패: {status}")
-                    if request_record:
-                        try:
-                            logger.info(f"💾 실패 상태 업데이트 중 - ID: {request_record.id}")
-                            TranscriptionService.complete_request(
-                                db=db,
-                                request_id=request_record.id,
-                                status="failed",
-                                error_message=f"Daglo transcription failed: {status}"
-                            )
-                        except Exception as db_error:
-                            logger.error(f"❌ 실패 상태 업데이트 실패: {db_error}")
-                            print(f"Failed to update request record: {db_error}")
-                    
-                    raise HTTPException(status_code=500, detail="음성 변환에 실패했습니다.")
-                else:
-                    # 아직 처리 중, 10초 대기
-                    logger.info(f"⏳ 변환 진행 중... 10초 대기 (상태: {status})")
-                    time.sleep(10)
-            else:
-                logger.error(f"❌ 결과 조회 실패 - 상태 코드: {result_response.status_code}")
-                raise HTTPException(status_code=result_response.status_code, detail="결과 조회 실패")
-        
-        # 최대 시도 횟수 초과
-        logger.error(f"⏰ 변환 타임아웃 - 최대 시도 횟수({max_attempts}) 초과")
-        if request_record:
-            try:
-                logger.info(f"💾 타임아웃 상태 업데이트 중 - ID: {request_record.id}")
+                logger.info(f"💾 요청 완료 처리 중 - ID: {request_record.id}")
                 TranscriptionService.complete_request(
                     db=db,
                     request_id=request_record.id,
-                    status="failed",
-                    error_message="Transcription timeout"
+                    status="completed"
                 )
+                logger.info("✅ 요청 완료 처리 성공")
+                
+                # 응답 데이터 저장 (요약 포함)
+                transcription_service = TranscriptionService(db)
+
+                # 오디오 길이 계산 (분 단위) - STT 시간 + 요약 시간
+                duration_seconds = transcription_result.get('audio_duration', 0)
+                # stt_processing_time = transcription_result.get('processing_time', 0)
+                # stt_processing_time = transcription_result.get('processing_time', 0)
+                total_processing_time = processing_time + summary_time
+                
+                logger.info(f"✅ audio_duration ============================== {duration_seconds}")
+                logger.info(f"✅ summary_time ============================== {summary_time}")
+                logger.info(f"✅ total_processing_time ============================== {total_processing_time}")
+
+                # STT 시간 + 요약 시간을 분 단위로 계산
+                audio_duration_minutes = round(total_processing_time / 60, 2)
+                logger.info(f"✅ audio_duration_minutes ============================== {audio_duration_minutes}")
+                
+                # 토큰 사용량 계산 (1분당 1점)
+                tokens_used = round(audio_duration_minutes * 1.0, 2)
+                logger.info(f"✅ tokens_used ============================== {tokens_used}")
+                
+                # 서비스 제공업체 정보
+                service_provider = transcription_result.get('service_name', 'unknown')
+                
+                logger.info(f"✅ service_provider ============================== {service_provider}")
+                
+                try:
+                    # STT 결과에서 confidence와 language_code 추출
+                    confidence_score = transcription_result.get('confidence')
+                    language_detected = transcription_result.get('language_code')
+                    
+                    transcription_service.create_response(
+                        request_id=request_record.id,
+                        transcription_text=transcribed_text,
+                        summary_text=summary_text,
+                        service_used=service_provider,
+                        processing_time=processing_time,
+                        duration=processing_time,
+                        success=True,
+                        error_message=None,
+                        service_provider=service_provider,
+                        audio_duration_minutes=audio_duration_minutes,
+                        tokens_used=tokens_used,
+                        response_data=json.dumps(transcription_result, ensure_ascii=False) if transcription_result else None,
+                        confidence_score=confidence_score,
+                        language_detected=language_detected
+                    )
+                    logger.info(f"✅ 응답 저장 완료 - 요청 ID: {request_record.id}")
+                except Exception as e:
+                    logger.error(f"❌ 응답 저장 실패 - 요청 ID: {request_record.id}, 오류: {str(e)}")
+                    # 응답 저장 실패 시에도 요청 완료 처리
+                    transcription_service.complete_request(
+                        db=db,
+                        request_id=request_record.id,
+                        status="completed_with_save_error",
+                        error_message=f"Response save failed: {str(e)}"
+                    )
+                
+                logger.info(f"✅ log ============================== 001")
+                
             except Exception as db_error:
-                logger.error(f"❌ 타임아웃 상태 업데이트 실패: {db_error}")
-                print(f"Failed to update request record: {db_error}")
+                print(f"Failed to save response: {db_error}")
         
-        raise HTTPException(status_code=408, detail="음성 변환 시간이 초과되었습니다.")
+        # 응답 데이터 구성 (사용자 정보 포함)
+        response_data = {
+            "user_id": None,  # 현재 인증되지 않은 사용자
+            "email": None,    # 현재 인증되지 않은 사용자
+            "stt_message": transcribed_text,
+            "stt_summary": summary_text,
+            "service_name": transcription_result.get('service_name', 'unknown'),
+            "processing_time": transcription_result.get('processing_time', processing_time),
+            "original_response": transcription_result
+        }
+        
+        logger.info(f"✅ log ============================== 002")
+        
+        # AssemblyAI 요약이 있는 경우 추가
+        if transcription_result.get('summary'):
+            response_data["assemblyai_summary"] = transcription_result.get('summary')
+            logger.info(f"📝 AssemblyAI 요약 포함됨: {len(transcription_result.get('summary', ''))}자")
+        
+        logger.info(f"✅ log ============================== 003")
+        
+        # API 사용 로그 기록 (성공)
+        try:
+            response_size = len(json.dumps(response_data).encode('utf-8'))
+            APIUsageService.log_api_usage(
+                db=db,
+                user_id=None,
+                api_key_hash=None,
+                endpoint="/transcribe/",
+                method="POST",
+                status_code=200,
+                request_size=file_size,
+                response_size=response_size,
+                processing_time=processing_time,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent")
+            )
+        except Exception as log_error:
+            print(f"Failed to log API usage: {log_error}")
+    
+        logger.info(f"✅ log ============================== 004")
+        
+        return JSONResponse(content=response_data)
     
     except HTTPException as he:
         logger.warning(f"⚠️ HTTP 예외 발생 - 상태 코드: {he.status_code}, 메시지: {he.detail}")
@@ -528,10 +533,11 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
         
         raise he
     except Exception as e:
+        import traceback as tb
         logger.error(f"💥 예상치 못한 오류 발생: {type(e).__name__}: {str(e)}")
-        logger.error(f"📍 오류 추적:\n{traceback.format_exc()}")
+        logger.error(f"📍 오류 추적:\n{tb.format_exc()}")
         print(f"Exception occurred: {type(e).__name__}: {str(e)}")
-        traceback.print_exc()
+        tb.print_exc()
         
         # 요청 실패로 업데이트
         if request_record:
@@ -565,8 +571,8 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...), db: S
             logger.error(f"❌ 서버 오류 API 사용 로그 기록 실패: {log_error}")
             print(f"Failed to log API usage: {log_error}")
         
-        logger.error("🔄 전역 예외 핸들러로 예외 전달")
-        raise e  # 전역 예외 핸들러가 처리하도록 함
+        logger.error("🔄 HTTP 예외로 변환하여 응답")
+        raise HTTPException(status_code=500, detail="음성 변환 중 예상치 못한 오류가 발생했습니다.")
 
 @app.get("/", summary="서비스 상태 확인")
 def read_root():
@@ -998,12 +1004,32 @@ def get_login_stats(days: int = 30, db: Session = Depends(get_db)):
 
 # API 키로 보호된 transcribe 엔드포인트
 @app.post("/transcribe/protected/", summary="API 키로 보호된 음성 파일 변환")
-async def transcribe_audio_protected(file: UploadFile = File(...), current_user: str = Depends(verify_api_key_dependency)):
+async def transcribe_audio_protected(
+    request: Request,
+    file: UploadFile = File(...), 
+    service: Optional[str] = None,
+    fallback: bool = True,
+    summarization: bool = False,
+    summary_model: str = "informative",
+    summary_type: str = "bullets",
+    current_user: str = Depends(verify_api_key_dependency),
+    db: Session = Depends(get_db)
+):
     """
     API 키로 보호된 음성 파일을 텍스트로 변환합니다.
     Authorization 헤더에 Bearer {api_key} 형식으로 API 키를 전달해야 합니다.
+    
+    Parameters:
+    - service: 사용할 STT 서비스 ("assemblyai" 또는 "daglo"). 지정하지 않으면 자동 선택
+    - fallback: 첫 번째 서비스 실패 시 다른 서비스로 자동 전환 여부 (기본값: True)
+    - summarization: 요약 기능 사용 여부 (ChatGPT API 사용)
+    - summary_model: 요약 모델 (사용되지 않음 - ChatGPT API 사용)
+    - summary_type: 요약 타입 (사용되지 않음 - ChatGPT API 사용)
     """
-    # 기존 transcribe_audio 로직과 동일
+    start_time = time.time()
+    transcription_service = TranscriptionService(db)
+    api_usage_service = APIUsageService(db)
+    
     try:
         # 파일 확장자 검증
         allowed_extensions = [".mp3", ".wav", ".m4a", ".flac", ".aac"]
@@ -1018,73 +1044,137 @@ async def transcribe_audio_protected(file: UploadFile = File(...), current_user:
         # 파일 내용 읽기
         file_content = await file.read()
         
-        # Daglo API 요청 준비
-        headers = {
-            "Authorization": f"Bearer {DAGLO_API_KEY}"
-        }
-        
-        files = {
-            "file": (file.filename, file_content, file.content_type)
-        }
-        
-        # Daglo API 호출
-        response = requests.post(DAGLO_API_URL, headers=headers, files=files)
-        
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=400,
-                detail=f"API 호출 실패: {response.text}"
-            )
-        
-        # 응답에서 rid 추출
-        response_data = response.json()
-        rid = response_data.get("rid")
-        
-        if not rid:
-            raise HTTPException(
-                status_code=500,
-                detail="API 응답에서 rid를 찾을 수 없습니다."
-            )
-        
-        # 결과 폴링
-        result_url = f"https://apis.daglo.ai/stt/v1/async/transcripts/{rid}"
-        max_attempts = 30
-        attempt = 0
-        
-        while attempt < max_attempts:
-            result_response = requests.get(result_url, headers=headers)
-            
-            if result_response.status_code == 200:
-                result_data = result_response.json()
-                status = result_data.get("status")
-                
-                if status == "completed":
-                    return {
-                        "status": "success",
-                        "transcription": result_data.get("text", ""),
-                        "user_id": current_user,
-                        "filename": file.filename
-                    }
-                elif status == "failed":
-                    raise HTTPException(
-                        status_code=500,
-                        detail="음성 변환에 실패했습니다."
-                    )
-            
-            attempt += 1
-            time.sleep(2)
-        
-        raise HTTPException(
-            status_code=408,
-            detail="음성 변환 시간이 초과되었습니다."
+        # 요청 정보 저장
+        request_record = transcription_service.create_request(
+            filename=file.filename,
+            file_size=len(file_content),
+            service_requested=service,
+            fallback_enabled=fallback,
+            client_ip=request.client.host,
+            user_agent=request.headers.get("user-agent", "")
         )
+        
+        # STT 처리
+        result = await stt_manager.process_audio(
+            file_content=file_content,
+            filename=file.filename,
+            service=service,
+            fallback=fallback
+        )
+        
+        # 요약 처리
+        summary_text = None
+        summary_time = 0.0
+        if summarization and result.get("transcription"):
+            try:
+                summary_start_time = time.time()
+                summary_result = openai_service.summarize_text(result["transcription"])
+                summary_time = time.time() - summary_start_time
+                summary_text = summary_result.get("summary", "")
+                logger.info(f"✅ 요약 생성 완료: {len(summary_text) if summary_text else 0}자, 소요시간: {summary_time:.2f}초")
+            except Exception as e:
+                logger.error(f"Summarization failed: {str(e)}")
+                summary_text = "요약 생성 중 오류가 발생했습니다."
+        
+        # 처리 시간 계산
+        processing_time = time.time() - start_time
+        
+        # STT 시간 + 요약 시간을 분 단위로 계산
+        stt_processing_time = result.get("processing_time", processing_time - summary_time)
+        total_processing_time = stt_processing_time + summary_time
+        audio_duration_minutes = round(total_processing_time / 60.0, 2)
+        
+        # 토큰 사용량 계산 (1분당 1점)
+        tokens_used = round(audio_duration_minutes * 1.0, 2)
+        
+        # STT 결과에서 confidence와 language_code 추출
+        confidence_score = result.get('confidence')
+        language_detected = result.get('language_code')
+        
+        # 응답 정보 저장 (새로운 컬럼들 포함)
+        response_record = transcription_service.create_response(
+            request_id=request_record.id,
+            transcription_text=result.get("transcription", ""),
+            summary_text=summary_text,
+            service_used=result.get("service_used", ""),
+            processing_time=processing_time,
+            duration=processing_time,
+            success=True,
+            error_message=None,
+            service_provider=result.get("service_used", ""),
+            audio_duration_minutes=audio_duration_minutes,
+            tokens_used=tokens_used,
+            response_data=json.dumps(result, ensure_ascii=False) if result else None,
+            confidence_score=confidence_score,
+            language_detected=language_detected
+        )
+        
+        # API 사용 로그 저장
+        api_usage_service.log_usage(
+            user_id=current_user,
+            endpoint="/transcribe/protected/",
+            method="POST",
+            status_code=200,
+            processing_time=processing_time,
+            client_ip=request.client.host,
+            user_agent=request.headers.get("user-agent", "")
+        )
+        
+        return {
+            "status": "success",
+            "transcription": result.get("transcription", ""),
+            "summary": summary_text,
+            "service_used": result.get("service_used", ""),
+            "duration": result.get("duration", 0),
+            "processing_time": round(processing_time, 2),
+            "audio_duration_minutes": audio_duration_minutes,
+            "tokens_used": tokens_used,
+            "user_id": current_user,
+            "filename": file.filename,
+            "request_id": request_record.id,
+            "response_id": response_record.id
+        }
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Transcription error: {str(e)}")
+        processing_time = time.time() - start_time
+        
+        # 실패한 경우에도 응답 기록 저장
+        if 'request_record' in locals():
+            try:
+                transcription_service.create_response(
+                    request_id=request_record.id,
+                    transcription_text="",
+                    summary_text=None,
+                    service_used="",
+                    processing_time=processing_time,
+                    duration=processing_time,
+                    success=False,
+                    error_message=str(e),
+                    service_provider="",
+                    audio_duration_minutes=0.0,
+                    tokens_used=0.0,
+                    confidence_score=None,
+                    language_detected=None
+                )
+            except Exception as db_error:
+                logger.error(f"❌ 응답 저장 실패: {db_error}")
+        
+        # API 사용 로그 저장
+        api_usage_service.log_usage(
+            user_id=current_user,
+            endpoint="/transcribe/protected/",
+            method="POST",
+            status_code=500,
+            processing_time=processing_time,
+            client_ip=request.client.host,
+            user_agent=request.headers.get("user-agent", "")
+        )
+        
+        logger.error(f"Transcription error: {str(e)}")
         traceback.print_exc()
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import logging
@@ -1092,4 +1182,4 @@ if __name__ == "__main__":
     # 로깅 레벨 설정
     logging.basicConfig(level=logging.DEBUG)
     
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True, log_level="debug")
+    uvicorn.run("app:app", host="0.0.0.0", port=8001, reload=False, log_level="debug")

@@ -39,7 +39,8 @@
    source venv/bin/activate
    
    # 패키지 설치
-   cd backend
+   python.exe -m pip install --upgrade pip
+   cd backend 
    pip install -r requirements.txt
    ```
 
@@ -83,7 +84,7 @@ python generate_meeting_audio.py
 #### 텍스트를 음성으로 변환
 
 ```bash
-python text_to_speech.py meeting_scripts/meeting_20250809_110851.txt --use-real-api --voice ko_KR_Jimin
+python text_to_speech.py meeting_scripts/meeting_20250812_112132.txt --use-real-api --voice ko_KR_Jimin
 ```
 
 생성된 회의록 텍스트를 음성 파일로 변환합니다. 

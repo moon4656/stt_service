@@ -66,7 +66,10 @@ class TranscriptionResponse(Base):
     language_detected = Column(String(10), nullable=True)  # 감지된 언어
     duration = Column(Float, nullable=True)  # 오디오 길이 (초)
     word_count = Column(Integer, nullable=True)  # 단어 수
-    daglo_response_data = Column(Text, nullable=True)  # Daglo API 전체 응답 (JSON)
+    response_data = Column(Text, nullable=True)  # API 전체 응답 (JSON)
+    service_provider = Column(String(50), nullable=True)  # 서비스 제공업체 (assemblyai, daglo)
+    audio_duration_minutes = Column(Float, nullable=True)  # 음성 길이 (분 단위, 소숫점 2자리)
+    tokens_used = Column(Float, nullable=True)  # 사용된 토큰 수 (소숫점 2자리)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class APIUsageLog(Base):
