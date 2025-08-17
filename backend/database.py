@@ -1,4 +1,5 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, Float
+from sqlalchemy import Index, UniqueConstraint, create_engine, Column, Integer, String, DateTime, Text, Boolean, Float
+import sqlalchemy
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
@@ -193,3 +194,149 @@ def test_connection():
     except Exception as e:
         print(f"Database connection failed: {e}")
         return False
+
+class SubscriptionPlan(Base):
+    """구독요금 테이블 - 서비스 구독 요금제 정보를 관리하는 테이블
+    
+    다양한 구독 요금제의 정보를 저장하며, 월 구독 금액과 제공되는 서비스 토큰 수를 관리합니다.
+    각 요금제는 고유한 요금 코드를 가지며, 요금제별 상세 설명과 혜택을 포함합니다.
+    """
+    __tablename__ = "subscription_plans"
+    
+    id = Column(Integer, primary_key=True, index=True)  # 구독요금 고유 식별자 (자동 증가)
+    plan_code = Column(String(50), unique=True, nullable=False, index=True)  # 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
+    plan_description = Column(String(500), nullable=False)  # 요금제 상세 설명
+    monthly_price = Column(Integer, nullable=False)  # 월 구독 금액 (원 단위)
+    monthly_service_tokens = Column(Integer, nullable=False)  # 월 제공 서비스 토큰 수
+    per_minute_rate = Column(Integer, nullable=True)  # 분당요금 (원 단위)
+    overage_per_minute_rate = Column(Integer, nullable=True)  # 초과분당요금 (원 단위)    
+    is_active = Column(Boolean, default=True)  # 요금제 활성화 상태 (비활성화시 신규 가입 불가)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 요금제 생성 시간
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())  # 요금제 정보 최종 수정 시간
+
+def generate_payment_id():
+    """날짜-순번 형태의 결재 번호를 생성합니다. (한국 시간 기준)"""
+    from datetime import timezone, timedelta
+    from sqlalchemy import text
+    
+    # 한국 시간(KST) 사용 - UTC+9
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).strftime("%Y%m%d")
+    
+    # 오늘 날짜의 마지막 순번 조회
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("SELECT payment_id FROM payments WHERE payment_id LIKE :pattern ORDER BY payment_id DESC LIMIT 1"),
+                {"pattern": f"{today}_%"}
+            )
+            last_payment = result.fetchone()
+            
+            if last_payment:
+                # 마지막 순번에서 1 증가
+                last_no = int(last_payment[0].split('_')[1])
+                next_no = last_no + 1
+            else:
+                # 오늘 첫 번째 결재
+                next_no = 1
+                
+        return f"{today}_{next_no:03d}"  # 3자리 순번 (001, 002, ...)
+    except:
+        # 에러 발생시 기본값
+        import random
+        return f"{today}_{random.randint(1, 999):03d}"
+
+class Payment(Base):
+    """결재 테이블 - 사용자 결재 정보를 관리하는 테이블
+    
+    사용자의 서비스 이용료 결재 내역을 저장합니다.
+    결재번호는 날짜_순번 형식으로 생성되며, 공급가액, 부가세, 합계 금액을 관리합니다.
+    각 결재는 특정 사용자와 연결되며, 결재 상태와 이력을 추적할 수 있습니다.
+    """
+    __tablename__ = "payments"
+    
+    payment_id = Column(String(50), primary_key=True, index=True, default=generate_payment_id)  # 결재번호 (yyyymmdd_nnn 형식)
+    user_uuid = Column(String(36), nullable=False, index=True)  # 결재한 사용자의 UUID (User.user_uuid 참조)
+    plan_code = Column(String(50), unique=True, nullable=False, index=True)  # 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
+    supply_amount = Column(Integer, nullable=False)  # 공급가액 (원 단위, 부가세 제외)
+    vat_amount = Column(Integer, nullable=False)  # 부가세 (원 단위)
+    total_amount = Column(Integer, nullable=False)  # 합계 금액 (공급가액 + 부가세)
+    payment_status = Column(String(20), nullable=False, default="pending")  # 결재 상태 (pending, completed, failed, cancelled)
+    payment_method = Column(String(50), nullable=True)  # 결재 수단 (card, bank_transfer, etc.)
+    payment_type = Column(String(50), nullable=False, default="subscription")  # 결재 구분 (subscription, overage, token_purchase, one_time)    
+    external_payment_id = Column(String(100), nullable=True)  # 외부 결재 시스템 ID (PG사 거래번호 등)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 결재 생성 시간
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())  # 결재 정보 최종 수정 시간
+    completed_at = Column(DateTime(timezone=True), nullable=True)  # 결재 완료 시간
+
+    # 구독결재내역 ( 결재번호, 단가, 인원수, 금액, 생성일자, 수정일자 )
+    # 초과토큰결재내역 ( 결재번호, 토큰수, 분당요금, 초과분당요금, 금액, 생성일자, 수정일자 )
+    # 구독결재내역
+    # subscription_payment = relationship("SubscriptionPayment", back_populates="payment", uselist=False)
+    # 초과토큰결재내역
+    # overage_payment = relationship("OveragePayment", back_populates="payment", uselist=False)
+
+class MonthlyBilling(Base):
+    """월별 빌링 테이블 - 사용자별 월별 사용량과 요금을 관리하는 테이블
+    
+    매월 사용자의 STT 서비스 사용량과 요금을 집계하여 저장합니다.
+    기본 구독료, 초과 사용료, 총 청구 금액 등을 포함하며,
+    월별 사용 통계와 과금 내역을 추적할 수 있습니다.
+    """
+    __tablename__ = "monthly_billings"
+    
+    id = Column(Integer, primary_key=True, index=True)  # 월별 빌링 고유 식별자 (자동 증가)
+    user_uuid = Column(String(36), nullable=False, index=True)  # 사용자 UUID (User.user_uuid 참조)
+    billing_year = Column(Integer, nullable=False)  # 청구 연도 (예: 2024)
+    billing_month = Column(Integer, nullable=False)  # 청구 월 (1-12)
+    plan_code = Column(String(50), nullable=False)  # 적용된 요금제 코드
+    
+    # 사용량 정보
+    total_minutes_used = Column(Float, nullable=False, default=0.0)  # 총 사용 시간 (분 단위)
+    included_minutes = Column(Float, nullable=False, default=0.0)  # 요금제 포함 시간 (분 단위)
+    excess_minutes = Column(Float, nullable=False, default=0.0)  # 초과 사용 시간 (분 단위)
+    total_requests = Column(Integer, nullable=False, default=0)  # 총 요청 건수
+    
+    # 요금 정보
+    base_subscription_fee = Column(Integer, nullable=False, default=0)  # 기본 구독료 (원 단위)
+    per_minute_rate = Column(Integer, nullable=True)  # 분당 기본 요금 (원 단위)
+    excess_per_minute_rate = Column(Integer, nullable=True)  # 초과분당 요금 (원 단위)
+    excess_usage_fee = Column(Integer, nullable=False, default=0)  # 초과 사용료 (원 단위)
+    
+    # 청구 금액
+    subtotal_amount = Column(Integer, nullable=False, default=0)  # 소계 (공급가액)
+    vat_amount = Column(Integer, nullable=False, default=0)  # 부가세 (10%)
+    total_billing_amount = Column(Integer, nullable=False, default=0)  # 총 청구 금액
+    
+    # 결제 상태
+    billing_status = Column(String(20), nullable=False, default="pending")  # 청구 상태 (pending, billed, paid, overdue)
+    payment_due_date = Column(Date, nullable=True)  # 결제 기한
+    paid_at = Column(DateTime(timezone=True), nullable=True)  # 결제 완료 시간
+    
+    # 메타데이터
+    billing_period_start = Column(Date, nullable=False)  # 청구 기간 시작일
+    billing_period_end = Column(Date, nullable=False)  # 청구 기간 종료일
+    generated_at = Column(DateTime(timezone=True), server_default=func.now())  # 청구서 생성 시간
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 레코드 생성 시간
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())  # 레코드 수정 시간
+    
+    # 복합 인덱스 (사용자별 월별 유니크)
+    __table_args__ = (
+        Index('idx_user_billing_period', 'user_uuid', 'billing_year', 'billing_month'),
+        UniqueConstraint('user_uuid', 'billing_year', 'billing_month', name='uq_user_monthly_billing'),
+    )
+
+def generate_monthly_billing_id():
+    """월별 빌링 ID를 생성합니다. (YYYYMM-사용자UUID 형식)"""
+    from datetime import datetime, timezone, timedelta
+    
+    # 한국 시간(KST) 사용 - UTC+9
+    kst = timezone(timedelta(hours=9))
+    now = datetime.now(kst)
+    year_month = now.strftime("%Y%m")
+    
+    return f"BILL-{year_month}"
+
+
+    
+    
