@@ -37,17 +37,17 @@ def verify_password(password: str, hashed_password: str) -> bool:
 
 class TokenManager:
     @staticmethod
-    def generate_api_key(user_id: str, token_id: str, description: str = "", db: Session = None) -> Dict:
+    def generate_api_key(user_uuid: str, token_id: str, description: str = "", db: Session = None) -> Dict:
         """사용자별 API 키 생성"""
         if db is None:
             # 기존 메모리 기반 로직 유지 (하위 호환성)
             for existing_token in tokens_db.values():
-                if existing_token.get("token_id") == token_id and existing_token["user_id"] == user_id:
+                if existing_token.get("token_id") == token_id and existing_token["user_uuid"] == user_uuid:
                     raise ValueError(f"Token ID '{token_id}' already exists for this user")
         else:
             # 데이터베이스에서 중복 확인
             existing_token = db.query(APIToken).filter(
-                APIToken.user_id == user_id,
+                APIToken.user_uuid == user_uuid,
                 APIToken.token_id == token_id,
                 APIToken.is_active == True
             ).first()
@@ -66,9 +66,10 @@ class TokenManager:
         if db is not None:
             # 데이터베이스에 토큰 저장
             db_token = APIToken(
-                user_id=user_id,
+                user_uuid=user_uuid,
                 token_id=token_id,
                 token_key=api_key_hash,
+                api_key=api_key,  # 신규 컬럼에 평문 API 키 저장
                 token_name=description,
                 is_active=True,
                 created_at=created_at
@@ -81,7 +82,7 @@ class TokenManager:
         token_info = {
             "api_key_hash": api_key_hash,
             "token_id": token_id,
-            "user_id": user_id,
+            "user_uuid": user_uuid,
             "description": description,
             "created_at": created_at.isoformat(),
             "is_active": True,
@@ -96,7 +97,7 @@ class TokenManager:
             "action": "created",
             "api_key_hash": api_key_hash,
             "token_id": token_id,
-            "user_id": user_id,
+            "user_uuid": user_uuid,
             "timestamp": created_at.isoformat(),
             "description": description
         })
@@ -105,7 +106,7 @@ class TokenManager:
             "api_key": api_key,
             "api_key_hash": api_key_hash,
             "token_id": token_id,
-            "user_id": user_id,
+            "user_uuid": user_uuid,
             "description": description,
             "created_at": created_at.isoformat(),
             "is_active": True
@@ -129,7 +130,7 @@ class TokenManager:
                 db.commit()
                 
                 return {
-                    "user_id": db_token.user_id,
+                    "user_uuid": db_token.user_uuid,
                     "token_id": db_token.token_id,
                     "token_name": db_token.token_name,
                     "created_at": db_token.created_at.isoformat(),
@@ -144,14 +145,14 @@ class TokenManager:
             return None
     
     @staticmethod
-    def get_user_tokens(user_id: str, db: Session = None) -> List[Dict]:
+    def get_user_tokens(user_uuid: str, db: Session = None) -> List[Dict]:
         """사용자의 모든 토큰 조회"""
         tokens = []
         
         if db is not None:
             # 데이터베이스에서 토큰 조회
             db_tokens = db.query(APIToken).filter(
-                APIToken.user_id == user_id,
+                APIToken.user_uuid == user_uuid,
                 APIToken.is_active == True
             ).order_by(APIToken.created_at.desc()).all()
             
@@ -166,7 +167,7 @@ class TokenManager:
         
         # 메모리에서도 조회 (기존 로직과의 호환성)
         for token_hash, token_info in tokens_db.items():
-            if token_info["user_id"] == user_id and token_info["is_active"]:
+            if token_info["user_uuid"] == user_uuid and token_info["is_active"]:
                 # 데이터베이스에서 이미 조회된 토큰과 중복 방지
                 if db is None or not any(t["token_id"] == token_info["token_id"] for t in tokens):
                     tokens.append({
@@ -198,6 +199,7 @@ def authenticate_user(user_id: str, password: str, db: Session = None) -> Option
         # 사용자 정보 반환
         return {
             "user_id": user.user_id,
+            "user_uuid": user.user_uuid,
             "email": user.email,
             "name": user.name,
             "user_type": user.user_type,
@@ -213,10 +215,10 @@ def authenticate_user(user_id: str, password: str, db: Session = None) -> Option
         db.close()
     
     @staticmethod
-    def revoke_api_key(api_key_hash: str, user_id: str) -> bool:
+    def revoke_api_key(api_key_hash: str, user_uuid: str) -> bool:
         """API 키 비활성화"""
         token_info = tokens_db.get(api_key_hash)
-        if not token_info or token_info["user_id"] != user_id:
+        if not token_info or token_info["user_uuid"] != user_uuid:
             return False
         
         token_info["is_active"] = False
@@ -226,18 +228,18 @@ def authenticate_user(user_id: str, password: str, db: Session = None) -> Option
         token_history_db.append({
             "action": "revoked",
             "api_key_hash": api_key_hash,
-            "user_id": user_id,
+            "user_uuid": user_uuid,
             "timestamp": datetime.datetime.utcnow().isoformat()
         })
         
         return True
     
     @staticmethod
-    def get_user_tokens(user_id: str) -> List[Dict]:
+    def get_user_tokens(user_uuid: str) -> List[Dict]:
         """사용자의 모든 토큰 조회"""
         user_tokens = []
         for api_key_hash, token_info in tokens_db.items():
-            if token_info["user_id"] == user_id:
+            if token_info["user_uuid"] == user_uuid:
                 # 민감한 정보 제외하고 반환
                 safe_token_info = {
                     "api_key_hash": api_key_hash,
@@ -255,11 +257,11 @@ def authenticate_user(user_id: str, password: str, db: Session = None) -> Option
         return user_tokens
     
     @staticmethod
-    def get_token_history(user_id: str, limit: int = 50) -> List[Dict]:
+    def get_token_history(user_uuid: str, limit: int = 50) -> List[Dict]:
         """사용자의 토큰 사용 내역 조회"""
         user_history = [
             history for history in token_history_db 
-            if history["user_id"] == user_id
+            if history["user_uuid"] == user_uuid
         ]
         
         # 최신 순으로 정렬
@@ -312,7 +314,7 @@ def verify_api_key_dependency(credentials: HTTPAuthorizationCredentials = Depend
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    return token_info["user_id"]
+    return token_info["user_uuid"]
 
 # 사용자 관리 (데이터베이스 기반)
 def create_user(user_id: str, email: str, name: str, user_type: str, password: str, phone_number: Optional[str] = None, db: Session = None) -> Dict:
@@ -358,6 +360,7 @@ def create_user(user_id: str, email: str, name: str, user_type: str, password: s
     # 메모리 기반 저장도 유지 (기존 코드 호환성)
     user_info = {
         "user_id": user_id,
+        "user_uuid": new_user.user_uuid,
         "email": email,
         "name": name,
         "user_type": user_type_code,
@@ -370,20 +373,27 @@ def create_user(user_id: str, email: str, name: str, user_type: str, password: s
     
     return user_info
 
-def get_user(user_id: str, db: Session = None) -> Optional[Dict]:
-    """사용자 정보 조회"""
-    # 먼저 메모리에서 확인
-    if user_id in users_db:
-        return users_db[user_id]
+def get_user(user_identifier: str, db: Session = None) -> Optional[Dict]:
+    """사용자 정보 조회 (user_id 또는 user_uuid로 검색 가능)"""
+    # 먼저 메모리에서 확인 (user_id 기준)
+    if user_identifier in users_db:
+        return users_db[user_identifier]
     
     # 데이터베이스에서 조회
     if db is None:
         db = next(get_db())
     
-    user = db.query(User).filter(User.user_id == user_id).first()
+    # user_id로 먼저 검색
+    user = db.query(User).filter(User.user_id == user_identifier).first()
+    
+    # user_id로 찾지 못하면 user_uuid로 검색
+    if not user:
+        user = db.query(User).filter(User.user_uuid == user_identifier).first()
+    
     if user:
         user_info = {
             "user_id": user.user_id,
+            "user_uuid": user.user_uuid,
             "email": user.email,
             "name": user.name,
             "user_type": user.user_type,
@@ -391,8 +401,8 @@ def get_user(user_id: str, db: Session = None) -> Optional[Dict]:
             "created_at": user.created_at.isoformat(),
             "is_active": user.is_active
         }
-        # 메모리에도 캐시
-        users_db[user_id] = user_info
+        # 메모리에도 캐시 (user_id 기준)
+        users_db[user.user_id] = user_info
         return user_info
     
     return None

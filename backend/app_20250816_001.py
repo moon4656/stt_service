@@ -286,38 +286,14 @@ async def transcribe_audio(
             print(f"Warning: Could not calculate audio duration")
             duration = None  # 체크 제약 조건을 위해 None으로 설정
         
-        # 음성 파일을 지정된 경로에 저장 (데이터베이스 기록 전에 수행)
-        stored_file_path = None
-        try:
-            logger.info(f"💾 음성 파일 저장 시작")
-            stored_file_path = save_uploaded_file(
-                user_uuid="anonymous",
-                request_id="temp",
-                filename=file.filename,
-                file_content=file_content
-            )
-            logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
-            print(f"✅ Audio file saved to: {stored_file_path}")
-            
-            # 파일 경로를 /stt_storage/부터의 상대 경로로 변환
-            from pathlib import Path
-            relative_path = stored_file_path.replace(str(Path.cwd()), "/").replace("\\", "/")
-            # if relative_path.startswith("/"):
-            #    relative_path = relative_path[1:]  # 맨 앞의 / 제거
-                
-        except Exception as storage_error:
-            logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
-            print(f"❌ Failed to save audio file: {storage_error}")
-            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용
-        
-        # 데이터베이스에 요청 기록 (파일 경로 포함)
+        # 데이터베이스에 요청 기록
         try:
             logger.info("💾 데이터베이스에 요청 기록 생성 중...")
             print(f"Attempting to create request record...")
             print(f"DB session: {db}")
             transcription_service = TranscriptionService(db)
             request_record = transcription_service.create_request(
-                filename=relative_path,  # 전체 경로로 변경
+                filename=file.filename,
                 file_size=file_size,
                 service_requested=service,
                 fallback_enabled=fallback,
@@ -325,6 +301,22 @@ async def transcribe_audio(
             )
             logger.info(f"✅ 요청 기록 생성 완료 - ID: {request_record.request_id}")
             print(f"✅ Created request record with ID: {request_record.request_id}")
+            
+            # 음성 파일을 지정된 경로에 저장
+            try:
+                logger.info(f"💾 음성 파일 저장 시작 - 사용자: {request_record.user_uuid}, 요청 ID: {request_record.request_id}")
+                stored_file_path = save_uploaded_file(
+                    user_uuid=request_record.user_uuid or "anonymous",
+                    request_id=request_record.request_id,
+                    filename=file.filename,
+                    file_content=file_content
+                )
+                logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
+                print(f"✅ Audio file saved to: {stored_file_path}")
+            except Exception as storage_error:
+                logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
+                print(f"❌ Failed to save audio file: {storage_error}")
+                # 파일 저장 실패는 치명적이지 않으므로 계속 진행
                 
         except Exception as db_error:
             logger.error(f"❌ 요청 기록 생성 실패: {db_error}")
@@ -1120,31 +1112,9 @@ async def transcribe_audio_protected(
         # 파일 내용 읽기
         file_content = await file.read()
         
-        # 음성 파일을 지정된 경로에 저장 (요청 정보 저장 전에 수행)
-        stored_file_path = None
-        try:
-            logger.info(f"💾 음성 파일 저장 시작 - 사용자: {current_user}")
-            stored_file_path = save_uploaded_file(
-                user_uuid=current_user,
-                request_id="temp",
-                filename=file.filename,
-                file_content=file_content
-            )
-            logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
-            
-            # 파일 경로를 /stt_storage/부터의 상대 경로로 변환
-            from pathlib import Path
-            relative_path = stored_file_path.replace(str(Path.cwd()), "").replace("\\", "/")
-            if relative_path.startswith("/"):
-                relative_path = relative_path[1:]  # 맨 앞의 / 제거
-                
-        except Exception as storage_error:
-            logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
-            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용
-        
-        # 요청 정보 저장 (파일 경로 포함)
+        # 요청 정보 저장
         request_record = transcription_service.create_request(
-            filename=relative_path,  # 전체 경로로 변경
+            filename=file.filename,
             file_size=len(file_content),
             service_requested=service,
             fallback_enabled=fallback,
@@ -1152,6 +1122,20 @@ async def transcribe_audio_protected(
             user_agent=request.headers.get("user-agent", ""),
             user_uuid=current_user  # user_uuid 전달 추가
         )
+        
+        # 음성 파일을 지정된 경로에 저장
+        try:
+            logger.info(f"💾 음성 파일 저장 시작 - 사용자: {current_user}, 요청 ID: {request_record.request_id}")
+            stored_file_path = save_uploaded_file(
+                user_uuid=current_user,
+                request_id=request_record.request_id,
+                filename=file.filename,
+                file_content=file_content
+            )
+            logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
+        except Exception as storage_error:
+            logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
+            # 파일 저장 실패는 치명적이지 않으므로 계속 진행
         
         # STT 처리
         result = stt_manager.transcribe_with_fallback(
@@ -1208,24 +1192,12 @@ async def transcribe_audio_protected(
         )
 
         # response_rid 업데이트 추가
-        # TranscriptionService.update_request_with_rid(
-        #     db=db,
-        #     request_id=request_record.request_id,
-        #     response_rid=str(response_record.id)
-        # )
-        
-        transcript_id = result.get('transcript_id')
-        if transcript_id:
-            try:
-                logger.info(f"💾 response_rid 업데이트 중 - ID: {request_record.request_id}, RID: {transcript_id}")
-                TranscriptionService.update_request_with_rid(db, request_record.request_id, transcript_id)
-                logger.info(f"✅ response_rid 업데이트 완료")
-            except Exception as rid_error:
-                logger.error(f"❌ response_rid 업데이트 실패: {rid_error}")                
-        
-        logger.info("💾 response_rid -------------------------------0 ")
-        logger.info(f"💾 response_rid RID: {transcript_id}")
-            
+        TranscriptionService.update_request_with_rid(
+            db=db,
+            request_id=request_record.request_id,
+            response_rid=str(response_record.id)
+        )
+
         # 요청 완료 상태로 업데이트
         TranscriptionService.complete_request(
             db=db,
@@ -1263,7 +1235,7 @@ async def transcribe_audio_protected(
         raise
     except Exception as e:
         processing_time = time.time() - start_time
-
+        
         # 실패한 경우에도 응답 기록 저장
         if 'request_record' in locals():
             try:
@@ -1300,9 +1272,6 @@ async def transcribe_audio_protected(
                     except Exception as rid_error:
                         logger.error(f"❌ response_rid 업데이트 실패: {rid_error}")                
                 
-                logger.info("💾 response_rid -------------------------------1 ")
-                logger.info(f"💾 response_rid RID: {transcript_id}")
-
                 # 요청을 실패 상태로 완료 처리
                 TranscriptionService.complete_request(
                     db=db,

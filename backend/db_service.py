@@ -19,14 +19,19 @@ class TranscriptionService:
                       service_requested: Optional[str] = None,
                       fallback_enabled: bool = True,
                       client_ip: Optional[str] = None,
-                      user_agent: Optional[str] = None) -> TranscriptionRequest:
+                      user_agent: Optional[str] = None,
+                      duration: Optional[float] = None,
+                      user_uuid: Optional[str] = None) -> TranscriptionRequest:
         """새로운 음성 변환 요청을 생성합니다."""
         file_extension = filename.split('.')[-1] if '.' in filename else ''
         request = TranscriptionRequest(
-            user_id=None,  # API 키 기반에서는 user_id가 없을 수 있음
+            user_uuid=user_uuid,  # user_uuid 파라미터 사용
             filename=filename,
             file_size=file_size,
             file_extension=file_extension,
+            service_provider=service_requested,
+            client_ip=client_ip,
+            duration=duration,
             status="processing"
         )
         self.db.add(request)
@@ -34,7 +39,7 @@ class TranscriptionService:
         self.db.refresh(request)
         return request
     
-    def create_response(self, request_id: int, transcription_text: str,
+    def create_response(self, request_id: str, transcription_text: str,
                        summary_text: Optional[str] = None,
                        service_used: str = "",
                        processing_time: float = 0.0,
@@ -73,17 +78,24 @@ class TranscriptionService:
         
         logger.info(f"✅ response ============================== {response}")
         
-        self.db.add(response)
-        self.db.commit()
-        self.db.refresh(response)
-        return response
+        try:
+            self.db.add(response)
+            self.db.commit()
+            self.db.refresh(response)
+            logger.info(f"✅ Response successfully saved to database")
+            return response
+        except Exception as e:
+            logger.error(f"❌ Error saving response to database: {str(e)}")
+            logger.error(f"❌ Error type: {type(e).__name__}")
+            self.db.rollback()
+            raise e
     
     @staticmethod
-    def create_request_static(db: Session, user_id: Optional[str], filename: str, 
+    def create_request_static(db: Session, user_uuid: Optional[str], filename: str, 
                       file_size: int, file_extension: str) -> TranscriptionRequest:
         """새로운 음성 변환 요청을 생성합니다 (기존 호환성용)."""
         request = TranscriptionRequest(
-            user_id=user_id,
+            user_uuid=user_uuid,
             filename=filename,
             file_size=file_size,
             file_extension=file_extension,
@@ -95,18 +107,18 @@ class TranscriptionService:
         return request
     
     @staticmethod
-    def update_request_with_rid(db: Session, request_id: int, daglo_rid: str):
-        """요청에 Daglo RID를 업데이트합니다."""
-        request = db.query(TranscriptionRequest).filter(TranscriptionRequest.id == request_id).first()
+    def update_request_with_rid(db: Session, request_id: str, response_rid: str):
+        """요청에 STT API Response RID를 업데이트합니다."""
+        request = db.query(TranscriptionRequest).filter(TranscriptionRequest.request_id == request_id).first()
         if request:
-            request.daglo_rid = daglo_rid
+            request.response_rid = response_rid
             db.commit()
     
     @staticmethod
-    def complete_request(db: Session, request_id: int, status: str = "completed", 
+    def complete_request(db: Session, request_id: str, status: str = "completed", 
                         error_message: Optional[str] = None):
         """요청을 완료 상태로 업데이트합니다."""
-        request = db.query(TranscriptionRequest).filter(TranscriptionRequest.id == request_id).first()
+        request = db.query(TranscriptionRequest).filter(TranscriptionRequest.request_id == request_id).first()
         if request:
             request.status = status
             request.completed_at = datetime.now(timezone.utc)
@@ -117,7 +129,7 @@ class TranscriptionService:
             db.commit()
     
     @staticmethod
-    def create_response_from_daglo(db: Session, request_id: int, daglo_response: Dict, 
+    def create_response_from_daglo(db: Session, request_id: str, daglo_response: Dict, 
                        summary_text: Optional[str] = None) -> TranscriptionResponse:
         """음성 변환 응답을 저장합니다."""
         # Daglo 응답에서 필요한 정보 추출
@@ -158,6 +170,22 @@ class TranscriptionService:
         
         logger.info(f"✅ daglo_response test ============================== 001")
         
+        # response_data 크기 제한 (최대 50KB)
+        response_data_str = json.dumps(daglo_response, ensure_ascii=False)
+        if len(response_data_str) > 50000:  # 50KB 제한
+            # 큰 데이터는 요약된 버전만 저장
+            simplified_response = {
+                "text": daglo_response.get("text", "")[:1000] + "...(truncated)" if len(daglo_response.get("text", "")) > 1000 else daglo_response.get("text", ""),
+                "confidence": daglo_response.get("confidence"),
+                "language": daglo_response.get("language"),
+                "duration": daglo_response.get("duration"),
+                "processing_time": daglo_response.get("processing_time"),
+                "error": daglo_response.get("error"),
+                "note": "Original response was truncated due to size limit"
+            }
+            response_data_str = json.dumps(simplified_response, ensure_ascii=False)
+            logger.warning(f"⚠️ Response data truncated due to size limit. Original size: {len(json.dumps(daglo_response, ensure_ascii=False))} bytes")
+        
         response = TranscriptionResponse(
             request_id=request_id,
             transcribed_text=transcribed_text,
@@ -166,33 +194,40 @@ class TranscriptionService:
             language_detected=language_detected,
             duration=duration,
             word_count=word_count,
-            response_data=json.dumps(daglo_response, ensure_ascii=False)
+            response_data=response_data_str
         )
         
         logger.info(f"✅ daglo_response test ============================== 002")
         logger.info(f"✅ daglo_response response ============================== {response}")
         
-        db.add(response)
-        db.commit()
-        db.refresh(response)
-        return response
+        try:
+            db.add(response)
+            db.commit()
+            db.refresh(response)
+            logger.info(f"✅ Response successfully saved to database")
+            return response
+        except Exception as e:
+            logger.error(f"❌ Error saving response to database: {str(e)}")
+            logger.error(f"❌ Error type: {type(e).__name__}")
+            db.rollback()
+            raise e
     
     @staticmethod
-    def get_request_by_id(db: Session, request_id: int) -> Optional[TranscriptionRequest]:
+    def get_request_by_id(db: Session, request_id: str) -> Optional[TranscriptionRequest]:
         """ID로 요청을 조회합니다."""
-        return db.query(TranscriptionRequest).filter(TranscriptionRequest.id == request_id).first()
+        return db.query(TranscriptionRequest).filter(TranscriptionRequest.request_id == request_id).first()
     
     @staticmethod
-    def get_user_requests(db: Session, user_id: str, limit: int = 50) -> List[TranscriptionRequest]:
+    def get_user_requests(db: Session, user_uuid: str, limit: int = 50) -> List[TranscriptionRequest]:
         """사용자의 요청 목록을 조회합니다."""
         return db.query(TranscriptionRequest).filter(
-            TranscriptionRequest.user_id == user_id
+            TranscriptionRequest.user_uuid == user_uuid
         ).order_by(TranscriptionRequest.created_at.desc()).limit(limit).all()
     
     @staticmethod
-    def get_request_with_response(db: Session, request_id: int) -> Optional[Dict]:
+    def get_request_with_response(db: Session, request_id: str) -> Optional[Dict]:
         """요청과 응답을 함께 조회합니다."""
-        request = db.query(TranscriptionRequest).filter(TranscriptionRequest.id == request_id).first()
+        request = db.query(TranscriptionRequest).filter(TranscriptionRequest.request_id == request_id).first()
         if not request:
             return None
         
@@ -211,14 +246,14 @@ class APIUsageService:
     def __init__(self, db: Session):
         self.db = db
     
-    def log_usage(self, user_id: Optional[str], endpoint: str, method: str, 
+    def log_usage(self, user_uuid: Optional[str], endpoint: str, method: str, 
                   status_code: int, processing_time: Optional[float] = None,
                   client_ip: Optional[str] = None, user_agent: Optional[str] = None,
                   api_key_hash: Optional[str] = None,
                   request_size: Optional[int] = None, response_size: Optional[int] = None):
         """API 사용 로그를 기록합니다."""
         log = APIUsageLog(
-            user_id=user_id,
+            user_uuid=user_uuid,
             api_key_hash=api_key_hash,
             endpoint=endpoint,
             method=method,
@@ -234,14 +269,14 @@ class APIUsageService:
         self.db.commit()
     
     @staticmethod
-    def log_api_usage(db: Session, user_id: Optional[str], api_key_hash: Optional[str],
+    def log_api_usage(db: Session, user_uuid: Optional[str], api_key_hash: Optional[str],
                      endpoint: str, method: str, status_code: int,
                      request_size: Optional[int] = None, response_size: Optional[int] = None,
                      processing_time: Optional[float] = None, ip_address: Optional[str] = None,
                      user_agent: Optional[str] = None):
         """API 사용 로그를 기록합니다 (기존 호환성용)."""
         log = APIUsageLog(
-            user_id=user_id,
+            user_uuid=user_uuid,
             api_key_hash=api_key_hash,
             endpoint=endpoint,
             method=method,
@@ -257,7 +292,7 @@ class APIUsageService:
         db.commit()
     
     @staticmethod
-    def get_user_usage_stats(db: Session, user_id: str, days: int = 30) -> Dict:
+    def get_user_usage_stats(db: Session, user_uuid: str, days: int = 30) -> Dict:
         """사용자의 API 사용 통계를 조회합니다."""
         from sqlalchemy import func
         from datetime import datetime, timedelta
@@ -266,13 +301,13 @@ class APIUsageService:
         
         # 총 요청 수
         total_requests = db.query(func.count(APIUsageLog.id)).filter(
-            APIUsageLog.user_id == user_id,
+            APIUsageLog.user_uuid == user_uuid,
             APIUsageLog.created_at >= start_date
         ).scalar()
         
         # 성공 요청 수 (2xx 상태 코드)
         successful_requests = db.query(func.count(APIUsageLog.id)).filter(
-            APIUsageLog.user_id == user_id,
+            APIUsageLog.user_uuid == user_uuid,
             APIUsageLog.created_at >= start_date,
             APIUsageLog.status_code >= 200,
             APIUsageLog.status_code < 300
@@ -280,20 +315,20 @@ class APIUsageService:
         
         # 평균 처리 시간
         avg_processing_time = db.query(func.avg(APIUsageLog.processing_time)).filter(
-            APIUsageLog.user_id == user_id,
+            APIUsageLog.user_uuid == user_uuid,
             APIUsageLog.created_at >= start_date,
             APIUsageLog.processing_time.isnot(None)
         ).scalar()
         
         # 총 데이터 사용량
         total_request_size = db.query(func.sum(APIUsageLog.request_size)).filter(
-            APIUsageLog.user_id == user_id,
+            APIUsageLog.user_uuid == user_uuid,
             APIUsageLog.created_at >= start_date,
             APIUsageLog.request_size.isnot(None)
         ).scalar() or 0
         
         total_response_size = db.query(func.sum(APIUsageLog.response_size)).filter(
-            APIUsageLog.user_id == user_id,
+            APIUsageLog.user_uuid == user_uuid,
             APIUsageLog.created_at >= start_date,
             APIUsageLog.response_size.isnot(None)
         ).scalar() or 0
@@ -312,8 +347,8 @@ class APIUsageService:
         }
     
     @staticmethod
-    def get_recent_logs(db: Session, user_id: str, limit: int = 50) -> List[APIUsageLog]:
+    def get_recent_logs(db: Session, user_uuid: str, limit: int = 50) -> List[APIUsageLog]:
         """사용자의 최근 API 사용 로그를 조회합니다."""
         return db.query(APIUsageLog).filter(
-            APIUsageLog.user_id == user_id
+            APIUsageLog.user_uuid == user_uuid
         ).order_by(APIUsageLog.created_at.desc()).limit(limit).all()

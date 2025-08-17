@@ -127,15 +127,6 @@ print(response.json())
 
 ## 추가 스크립트 설명
 
-### run_demo.py
-
-전체 워크플로우를 자동으로 실행하는 데모 스크립트입니다. 다음과 같은 기능을 제공합니다:
-
-- 가상 회의록 생성, TTS 변환, STT 서비스 실행을 순차적으로 자동화
-- 생성된 파일 자동 감지 및 처리
-- 브라우저에서 Swagger UI 자동 실행
-- 사용자 친화적인 콘솔 출력
-
 ### generate_meeting_audio.py
 
 가상의 3자 대면 회의록을 생성하는 스크립트입니다. 다음과 같은 기능을 제공합니다:
@@ -166,8 +157,54 @@ print(response.json())
    - 테스트를 위해 실제 음성 파일을 별도로 준비해야 함
 
 ## 라이센스
+MIT License
+
+
+## Project Tree
+```
+stt_project/
+├── backend/
+│   ├── app.py
+│   ├── generate_meeting_audio.py
+│   ├── requirements.txt
+│   ├── test_api_file_storage.py
+│   ├── test_file_storage.py
+│   ├── text_to_speech.py
+│   └── utils.py
+├── frontend/
+│   ├── index.html
+│   ├── script.js
+│   └── style.css
+├── meeting_scripts/
+├── stt_results/
+└── README.md
+```
+stt_storage/
+├── {user_uuid}/              # 사용자별 디렉토리
+│   └── 2025-08-15/           # 날짜별 디렉토리 (YYYY-MM-DD)
+│       └── {request_id}/     # 요청 ID별 디렉토리
+│           └── 음성파일.wav   # 업로드된 음성파일
+└── anonymous/                # 익명 사용자용
+    └── 2025-08-15/
+        └── 20250815-091119-643c4e89/
+            └── test_upload.wav
 
 ## GITHUB   
+
+- git init
+- git status
+- git remote -v
+- git config --list
+
+# git 사용자정보 설정
+# 전역 설정 (모든 저장소에 적용)
+- git config --global user.name "사용자명"
+- git config --global user.email "이메일@example.com"
+
+# 로컬 설정 (현재 저장소에만 적용)
+- git config user.name "사용자명"
+- git config user.email "이메일@example.com"
+
 # 프로젝트 루트 디렉토리에서
 - git init
 - git add .
