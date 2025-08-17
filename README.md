@@ -246,4 +246,19 @@ stt_storage/
 # uvicorn 서버 실행
 - uvicorn app:app --host 0.0.0.0 --port 8001 --reload
 
+# 1단계: Git 상태 확인
+- git status
+
+# 2단계: 변경 사항 확인
+- git diff
+
+# 3단계: 변경 사항 스테이징
+- git add .
+
+# 4단계: 커밋
+- git commit -m "Add new feature"
+
+# 5단계: 원격 저장소에 푸시
+- git push origin main
+
 MIT

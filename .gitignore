@@ -26,7 +26,13 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-/stt_storage
+
+# 음성 파일 제외
+backend/stt_storage/
+*.wav
+*.mp3
+*.flac
+*.m4a#
 
 # PyInstaller
 *.manifest
