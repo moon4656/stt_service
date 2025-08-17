@@ -1,4 +1,4 @@
-from sqlalchemy import Index, UniqueConstraint, create_engine, Column, Integer, String, DateTime, Text, Boolean, Float
+from sqlalchemy import Date, ForeignKey, Index, UniqueConstraint, create_engine, Column, Integer, String, DateTime, Text, Boolean, Float
 import sqlalchemy
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -336,6 +336,31 @@ def generate_monthly_billing_id():
     year_month = now.strftime("%Y%m")
     
     return f"BILL-{year_month}"
+
+class SubscriptionPayment(Base):
+    """구독결재내역 테이블 - 구독 요금제 결재 상세 정보"""
+    __tablename__ = "subscription_payments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    payment_id = Column(String(50), ForeignKey('payments.payment_id'), nullable=False)
+    plan_code = Column(String(50), nullable=False)  # 요금제 코드
+    unit_price = Column(Integer, nullable=False)  # 단가
+    quantity = Column(Integer, nullable=False, default=1)  # 인원수
+    amount = Column(Integer, nullable=False)  # 금액
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class TokenPayment(Base):
+    """서비스토큰결재내역 테이블 - 토큰 구매 결재 상세 정보"""
+    __tablename__ = "token_payments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    payment_id = Column(String(50), ForeignKey('payments.payment_id'), nullable=False)
+    token_quantity = Column(Integer, nullable=False)  # 토큰 수량
+    token_unit_price = Column(Integer, nullable=False)  # 토큰 단가
+    amount = Column(Integer, nullable=False)  # 총 금액
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
     
