@@ -14,16 +14,24 @@ class TranscriptionService:
     
     def __init__(self, db: Session):
         self.db = db
-    
-    def create_request(self, filename: str, file_size: int, 
-                      service_requested: Optional[str] = None,
-                      fallback_enabled: bool = True,
-                      client_ip: Optional[str] = None,
-                      user_agent: Optional[str] = None,
-                      duration: Optional[float] = None,
-                      user_uuid: Optional[str] = None) -> TranscriptionRequest:
+
+    def create_request(self, 
+                       user_uuid: Optional[str] = None, 
+                       filename: str = None, 
+                       file_size: int = None,
+                       service_name: str = None,
+                       model_name: str = None,
+                       language: str = None,
+                       audio_duration: float = None,
+                       stored_file_path: str = None,
+                       service_requested: str = None,
+                       client_ip: str = None,
+                       user_agent: str = None,
+                       duration: float = None,
+                       fallback_enabled: bool = True,   
+                       ) -> TranscriptionRequest:
         """새로운 음성 변환 요청을 생성합니다."""
-        file_extension = filename.split('.')[-1] if '.' in filename else ''
+        file_extension = filename.split('.')[-1] if filename and '.' in filename else ''
         request = TranscriptionRequest(
             user_uuid=user_uuid,  # user_uuid 파라미터 사용
             filename=filename,
@@ -113,6 +121,26 @@ class TranscriptionService:
         if request:
             request.response_rid = response_rid
             db.commit()
+
+    @staticmethod
+    def update_file_path(db: Session, request_id: str, file_path: str) -> bool:
+        """요청의 파일 경로를 업데이트합니다."""
+        try:
+            request = db.query(TranscriptionRequest).filter(TranscriptionRequest.request_id == request_id).first()
+            
+            if request:
+                request.file_path = file_path
+                db.commit()
+                logger.info(f"✅ 파일 경로 업데이트 완료 - ID: {request_id}, Path: {file_path}")
+                return True
+            else:
+                logger.error(f"❌ 요청을 찾을 수 없음 - ID: {request_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ 파일 경로 업데이트 실패: {e}")
+            db.rollback()
+            return False
     
     @staticmethod
     def complete_request(db: Session, request_id: str, status: str = "completed", 
@@ -273,7 +301,8 @@ class APIUsageService:
                      endpoint: str, method: str, status_code: int,
                      request_size: Optional[int] = None, response_size: Optional[int] = None,
                      processing_time: Optional[float] = None, ip_address: Optional[str] = None,
-                     user_agent: Optional[str] = None):
+                     user_agent: Optional[str] = None,
+                     success: bool = True):
         """API 사용 로그를 기록합니다 (기존 호환성용)."""
         log = APIUsageLog(
             user_uuid=user_uuid,

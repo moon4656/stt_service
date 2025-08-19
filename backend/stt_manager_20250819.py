@@ -2,7 +2,6 @@ from typing import Dict, Any, List, Optional
 from stt_service_interface import STTServiceInterface
 from assemblyai_service import AssemblyAIService
 from daglo_service import DagloService
-from fast_whisper_service import FastWhisperService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,19 +18,6 @@ class STTManager:
     
     def _initialize_services(self):
         """사용 가능한 STT 서비스들을 초기화합니다."""
-        # Fast-Whisper 서비스 추가 (우선순위 높음)
-        try:
-            fast_whisper = FastWhisperService()
-            if fast_whisper.is_configured():
-                self.services["fast-whisper"] = fast_whisper
-                if not self.default_service:
-                    self.default_service = "fast-whisper"
-                logger.info("Fast-Whisper 서비스가 초기화되었습니다.")
-            else:
-                logger.warning("Fast-Whisper 서비스가 설정되지 않았습니다.")
-        except Exception as e:
-            logger.error(f"Fast-Whisper 서비스 초기화 실패: {e}")
-        
         # AssemblyAI 서비스 추가
         try:
             assemblyai = AssemblyAIService()

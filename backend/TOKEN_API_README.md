@@ -112,6 +112,28 @@ curl -X POST "http://localhost:8000/transcribe/protected/" \
   -F "file=@audio_file.mp3"
 ```
 
+#### Fast-Whisper 서비스 사용 예
+```bash
+curl -X POST "http://localhost:8001/transcribe/" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@audio.mp3" \
+  -F "service=fast-whisper" \
+  -F "model_size=base" \
+  -F "task=transcribe" \
+  -F "language=ko"
+```
+
+### 보호된 Fast-Whisper 서비스 사용 예
+```bash
+curl -X POST "http://localhost:8001/transcribe/protected/" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@audio.mp3" \
+  -F "service=fast-whisper" \
+  -F "model_size=medium" \
+  -F "task=translate"
+```
+
 ## 인증 방식
 
 ### JWT 토큰 인증

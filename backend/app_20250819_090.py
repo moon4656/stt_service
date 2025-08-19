@@ -211,6 +211,9 @@ async def transcribe_audio(
     service: Optional[str] = None,
     fallback: bool = True,
     summarization: bool = False,
+    # fast-whisper 전용 옵션들
+    model_size: Optional[str] = None,  # tiny, base, small, medium, large-v2, large-v3
+    task: Optional[str] = None,  # transcribe, translate
     # summary_model: str = "informative",
     # summary_type: str = "bullets",
     db: Session = Depends(get_db)
@@ -222,14 +225,12 @@ async def transcribe_audio(
     
     - **file**: 변환할 음성 파일
     - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper). 미지정시 기본 서비스 사용
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
     - **summarization**: ChatGPT API 요약 기능 사용 여부 (기본값: False, 모든 서비스에서 지원)
     - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
     - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     """
-
+    
     start_time = time.time()
     request_record = None
     
@@ -250,396 +251,294 @@ async def transcribe_audio(
             try:
                 logger.info("📊 API 사용 로그 기록 중 (실패)...")
                 print(f"Attempting to log API usage (failure)...")
-                APIUsageService.log_api_usage(
-                    db=db,
-                    user_uuid=None,
-                    api_key_hash=None,
+                
+                api_usage_service = APIUsageService(db)
+                api_usage_service.log_usage(
+                    user_uuid="anonymous",
                     endpoint="/transcribe/",
                     method="POST",
                     status_code=400,
                     processing_time=time.time() - start_time,
-                    ip_address=request.client.host if request.client else None,
-                    user_agent=request.headers.get("user-agent")
+                    client_ip=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent", ""),
+                    api_key_hash="anonymous"
                 )
-                print(f"✅ API usage logged (failure)")
+                
+                logger.info("✅ API 사용 로그 기록 완료 (실패)")
+                print("API usage logged (failure)")
+                
             except Exception as log_error:
-                print(f"❌ Failed to log API usage: {log_error}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"❌ API 사용 로그 기록 실패: {str(log_error)}")
+                print(f"Failed to log API usage: {log_error}")
             
             raise HTTPException(
                 status_code=400, 
-                detail=f"지원되지 않는 파일 형식입니다. 지원 형식: {', '.join(supported_formats)}"
+                detail=f"지원하지 않는 파일 형식입니다. 지원 형식: {', '.join(supported_formats)}"
             )
         
         # 파일 내용 읽기
         file_content = await file.read()
         file_size = len(file_content)
         
-        logger.info(f"📊 파일 크기: {file_size:,} bytes")
+        logger.info(f"📊 파일 크기: {file_size} bytes")
+        print(f"File size: {file_size} bytes")
         
-        # 음성파일 재생 시간 계산
-        duration = get_audio_duration(file_content, file.filename)
-        if duration and duration > 0:
-            logger.info(f"🎵 음성파일 재생 시간: {format_duration(duration)}")
-            print(f"Audio duration: {format_duration(duration)}")
-        else:
-            logger.warning(f"⚠️ 음성파일 재생 시간을 계산할 수 없습니다")
-            print(f"Warning: Could not calculate audio duration")
-            duration = None  # 체크 제약 조건을 위해 None으로 설정
-        
-        # 데이터베이스에 요청 기록 (파일 경로 포함)
-        request_record = None  # 초기화
+        # 오디오 길이 계산
         try:
-            logger.info("💾 데이터베이스에 요청 기록 생성 중...")
-            print(f"Attempting to create request record...")
-            print(f"DB session: {db}")
-            transcription_service = TranscriptionService(db)
-            request_record = transcription_service.create_request(
-                filename=file.filename,  # 수정됨
-                file_size=file_size,
-                service_requested=service,
-                fallback_enabled=fallback,
-                duration=duration
-            )
-            logger.info(f"✅ 요청 기록 생성 완료 - ID: {request_record.request_id}")
-            print(f"✅ Created request record with ID: {request_record.request_id}")
-                
-        except Exception as db_error:
-            logger.error(f"❌ 요청 기록 생성 실패: {db_error}")
-            print(f"❌ Failed to create request record: {db_error}")
-            print(f"Error type: {type(db_error)}")
-            import traceback
-            traceback.print_exc()
-            # 요청 기록 생성 실패 시 HTTP 예외 발생
-            raise HTTPException(
-                status_code=500, 
-                detail="요청 기록 생성에 실패했습니다. 다시 시도해 주세요."
-            )        
+            audio_duration = get_audio_duration(file_content, file.filename)
+            logger.info(f"🎵 오디오 길이: {format_duration(audio_duration)}")
+            print(f"Audio duration: {format_duration(audio_duration)}")
+        except Exception as duration_error:
+            logger.warning(f"⚠️ 오디오 길이 계산 실패: {str(duration_error)}")
+            audio_duration = 0.0
         
-        # 음성 파일을 지정된 경로에 저장 (데이터베이스 기록 전에 수행)
-        stored_file_path = None
+        # 파일 저장
         try:
-            logger.info(f"💾 음성 파일 저장 시작")
-            transcription_service = TranscriptionService(db)
-            stored_file_path = save_uploaded_file(
-                user_uuid="anonymous",
-                request_id=request_record.request_id,
-                filename=file.filename,
-                file_content=file_content
-            )
-            logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
-            print(f"✅ Audio file saved to: {stored_file_path}")
-            
-            # 파일 경로를 /stt_storage/부터의 상대 경로로 변환
-            from pathlib import Path
-            relative_path = stored_file_path.replace(str(Path.cwd()), "/").replace("\\", "/")
-            if relative_path.startswith("/stt_storage"):
-                relative_path = relative_path[1:]  # 맨 앞의 / 제거
-                
-            # 3단계: 파일 경로 업데이트
-            transcription_service.update_file_path(
-                db=db,
-                request_id=request_record.request_id, 
-                file_path=relative_path
-            )
-                
+            stored_file_path = save_uploaded_file(file_content, file.filename)
+            logger.info(f"💾 파일 저장 완료: {stored_file_path}")
+            print(f"File saved: {stored_file_path}")
         except Exception as storage_error:
-            logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
-            print(f"❌ Failed to save audio file: {storage_error}")
-            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용
+            logger.warning(f"⚠️ 파일 저장 실패: {str(storage_error)}")
+            stored_file_path = None
         
-
+        # Fast-Whisper 전용 옵션 처리
+        transcribe_kwargs = {}
+        if service == "fast-whisper":
+            if model_size:
+                transcribe_kwargs["model_size"] = model_size
+            if task:
+                transcribe_kwargs["task"] = task
         
-        # STT 서비스를 사용하여 음성 변환 수행
-        logger.info(f"🚀 STT 변환 시작 - 서비스: {service or '기본값'}, 폴백: {fallback}")
-        print(f"Starting STT transcription - Service: {service or 'default'}, Fallback: {fallback}")
-        
-        # 요약 기능 파라미터 준비 (ChatGPT API 사용을 위해 제거)
-        extra_params = {}
-        if summarization:
-            logger.info(f"📝 요약 기능 활성화 - ChatGPT API 사용")
-        
-        # STT 매니저를 통해 음성 변환 수행
-        if service:
-            # 특정 서비스 지정
-            if fallback:
-                transcription_result = stt_manager.transcribe_with_fallback(file_content, file.filename, language_code="ko", preferred_service=service, **extra_params)
-            else:
-                transcription_result = stt_manager.transcribe_with_service(service, file_content, file.filename, **extra_params)
-        else:
-            # 기본 서비스 사용
-            if fallback:
-                transcription_result = stt_manager.transcribe_with_fallback(file_content, file.filename, **extra_params)
-            else:
-                transcription_result = stt_manager.transcribe_with_default(file_content, file.filename, **extra_params)
-        
-        logger.info(f"📡 STT 변환 완료 - 서비스: {transcription_result.get('service_name', 'unknown')}")
-        print(f"STT transcription completed - Service: {transcription_result.get('service_name', 'unknown')}")
-        
-        # 변환 실패 확인
-        if transcription_result.get('error'):
-            error_detail = transcription_result.get('error', 'Unknown error')
-            logger.error(f"❌ STT 변환 실패: {error_detail}")
+        # STT 변환 실행
+        if service and service in stt_manager.get_available_services():
+            logger.info(f"🎯 지정된 서비스로 변환 시작: {service}")
+            print(f"Using specified service: {service}")
             
-            # 요청 실패로 업데이트
-            if request_record:
-                try:
-                    logger.info(f"💾 요청 기록 업데이트 중 (실패) - ID: {request_record.request_id}")
-                    TranscriptionService.complete_request(
-                        db=db,
-                        request_id=request_record.request_id,
-                        status="failed",
-                        error_message=f"STT error: {error_detail}"
-                    )
-                except Exception as db_error:
-                    logger.error(f"❌ 요청 기록 업데이트 실패: {db_error}")
-                    print(f"Failed to update request record: {db_error}")
+            result = stt_manager.transcribe_with_service(
+                service, 
+                file_content, 
+                file.filename, 
+                language_code="ko",
+                **transcribe_kwargs
+            )
+        elif fallback:
+            logger.info(f"🔄 폴백 모드로 변환 시작 (선호 서비스: {service})")
+            print(f"Using fallback mode (preferred: {service})")
+            
+            result = stt_manager.transcribe_with_fallback(
+                file_content, 
+                file.filename, 
+                language_code="ko",
+                preferred_service=service,
+                **transcribe_kwargs
+            )
+        else:
+            logger.info(f"🎯 기본 서비스로 변환 시작")
+            print(f"Using default service")
+            
+            result = stt_manager.transcribe_with_default(
+                file_content, 
+                file.filename, 
+                language_code="ko",
+                **transcribe_kwargs
+            )
+        
+        # 변환 결과 확인
+        if result.get("error"):
+            logger.error(f"❌ STT 변환 실패: {result['error']}")
+            print(f"STT conversion failed: {result['error']}")
             
             # API 사용 로그 기록 (실패)
             try:
-                logger.info("📊 API 사용 로그 기록 중 (실패)...")
-                APIUsageService.log_api_usage(
-                    db=db,
-                    user_uuid=None,
-                    api_key_hash=None,
+                api_usage_service = APIUsageService(db)
+                api_usage_service.log_usage(
+                    user_uuid="anonymous",
                     endpoint="/transcribe/",
                     method="POST",
                     status_code=500,
-                    request_size=file_size,
                     processing_time=time.time() - start_time,
-                    ip_address=request.client.host if request.client else None,
-                    user_agent=request.headers.get("user-agent")
+                    client_ip=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent", ""),
+                    api_key_hash="anonymous"
                 )
             except Exception as log_error:
-                logger.error(f"❌ API 사용 로그 기록 실패: {log_error}")
-                print(f"Failed to log API usage: {log_error}")
+                logger.error(f"❌ API 사용 로그 기록 실패: {str(log_error)}")
             
-            raise HTTPException(status_code=500, detail=f"음성 변환 실패: {error_detail}")
+            raise HTTPException(status_code=500, detail=result["error"])
         
-        # 변환된 텍스트 추출
-        transcribed_text = transcription_result.get('text', '')
+        transcribed_text = result.get("text", "")
+        confidence_score = result.get("confidence", 0.0)
+        service_used = result.get("service_name", "unknown")
+        transcript_id = result.get("transcript_id", "")
+        processing_time = result.get("processing_time", 0.0)
+        detected_language = result.get("language_code", "ko")
         
-        logger.info(f"✅ transcription_result ============================== {transcription_result}")
-
+        logger.info(f"✅ STT 변환 완료 - 서비스: {service_used}")
+        logger.info(f"📝 변환된 텍스트 길이: {len(transcribed_text)} 문자")
+        logger.info(f"🎯 신뢰도: {confidence_score:.2f}")
+        logger.info(f"⏱️ 처리 시간: {processing_time:.2f}초")
+        print(f"Transcription completed using {service_used}")
+        print(f"Text length: {len(transcribed_text)} characters")
+        print(f"Confidence: {confidence_score:.2f}")
+        print(f"Processing time: {processing_time:.2f}s")
         
-        # 빈 텍스트 처리 (테스트를 위해 정상 처리로 변경)
-        if not transcribed_text:
-            logger.warning("⚠️ 변환된 텍스트가 비어있음 - 빈 텍스트로 처리 계속")
-            transcribed_text = ""  # 빈 문자열로 설정
-        
-        # 변환 완료
-        processing_time = time.time() - start_time
-        logger.info(f"✅ 변환 완료! 처리 시간: {processing_time:.2f}초")
-        logger.info(f"📝 변환된 텍스트 길이: {len(transcribed_text)}자")
-        
-        # OpenAI 요약 생성 (모든 서비스에서 요약 활성화 시 사용)
+        # 요약 처리
         summary_text = None
-        summary_time = 0.0
-        used_service = transcription_result.get('service_name', '').lower()
-        if transcribed_text and openai_service.is_configured() and summarization:
+        summary_processing_time = 0.0
+        
+        if summarization and transcribed_text.strip():
             try:
+                logger.info("📋 요약 생성 시작...")
+                print("Starting summarization...")
+                
                 summary_start_time = time.time()
-                logger.info(f"🤖 OpenAI 요약 생성 시작 ({used_service} 서비스)")
-                summary_text = await openai_service.summarize_text(transcribed_text)
-                summary_time = time.time() - summary_start_time
-                logger.info(f"✅ 요약 생성 완료: {len(summary_text) if summary_text else 0}자, 소요시간: {summary_time:.2f}초")
-                print(f"Summary generated successfully: {len(summary_text) if summary_text else 0} characters, time: {summary_time:.2f}s")
-            except Exception as summary_error:
-                logger.error(f"❌ 요약 생성 실패: {summary_error}")
-                print(f"Failed to generate summary: {summary_error}")
-        
-        # 요청 완료로 업데이트
-        if request_record:
-            try:
-                logger.info(f"💾 요청 완료 처리 중 - ID: {request_record.request_id}")
-                TranscriptionService.complete_request(
-                    db=db,
-                    request_id=request_record.request_id,
-                    status="completed"
-                )
-                logger.info("✅ 요청 완료 처리 성공")
+                summary_result = await openai_service.summarize_text(transcribed_text)
+                summary_processing_time = time.time() - summary_start_time
                 
-                # 응답 데이터 저장 (요약 포함)
-                transcription_service = TranscriptionService(db)
-
-                # transcript_id(response_rid) 저장
-                transcript_id = transcription_result.get('transcript_id')
-                if transcript_id:
-                    try:
-                        logger.info(f"💾 response_rid 업데이트 중 - ID: {request_record.request_id}, RID: {transcript_id}")
-                        TranscriptionService.update_request_with_rid(db, request_record.request_id, transcript_id)
-                        logger.info(f"✅ response_rid 업데이트 완료")
-                    except Exception as rid_error:
-                        logger.error(f"❌ response_rid 업데이트 실패: {rid_error}")
-
-                # 오디오 길이 계산 (분 단위) - STT 시간 + 요약 시간
-                duration_seconds = transcription_result.get('audio_duration', 0)
-                # stt_processing_time = transcription_result.get('processing_time', 0)
-                # stt_processing_time = transcription_result.get('processing_time', 0)
-                total_processing_time = processing_time + summary_time
-                
-                logger.info(f"✅ audio_duration ============================== {duration_seconds}")
-                logger.info(f"✅ summary_time ============================== {summary_time}")
-                logger.info(f"✅ total_processing_time ============================== {total_processing_time}")
-
-                # STT 시간 + 요약 시간을 분 단위로 계산
-                audio_duration_minutes = round(total_processing_time / 60, 2)
-                logger.info(f"✅ audio_duration_minutes ============================== {audio_duration_minutes}")
-                
-                # 토큰 사용량 계산 (1분당 1점)
-                tokens_used = round(audio_duration_minutes * 1.0, 2)
-                logger.info(f"✅ tokens_used ============================== {tokens_used}")
-                
-                # 서비스 제공업체 정보
-                service_provider = transcription_result.get('service_name', 'unknown')
-                
-                logger.info(f"✅ service_provider ============================== {service_provider}")
-                
-                try:
-                    # STT 결과에서 confidence와 language_code 추출
-                    confidence_score = transcription_result.get('confidence')
-                    language_detected = transcription_result.get('language_code')
+                # 요약 결과가 문자열인 경우 처리
+                if isinstance(summary_result, str):
+                    summary_text = summary_result
+                    logger.info(f"✅ 요약 생성 완료 - 길이: {len(summary_text)} 문자")
+                    logger.info(f"⏱️ 요약 처리 시간: {summary_processing_time:.2f}초")
+                    print(f"Summary completed - length: {len(summary_text)} characters")
+                elif summary_result and summary_result.get("success"):
+                    summary_text = summary_result.get("summary", "")
+                    logger.info(f"✅ 요약 생성 완료 - 길이: {len(summary_text)} 문자")
+                    logger.info(f"⏱️ 요약 처리 시간: {summary_processing_time:.2f}초")
+                    print(f"Summary completed - length: {len(summary_text)} characters")
+                else:
+                    error_msg = summary_result.get('error', '알 수 없는 오류') if isinstance(summary_result, dict) else '요약 결과가 올바르지 않습니다'
+                    logger.warning(f"⚠️ 요약 생성 실패: {error_msg}")
+                    print(f"Summary failed: {error_msg}")
                     
-                    transcription_service.create_response(
-                        request_id=request_record.request_id,
-                        transcription_text=transcribed_text,
-                        summary_text=summary_text,
-                        service_used=service_provider,
-                        processing_time=processing_time,
-                        duration=processing_time,
-                        success=True,
-                        error_message=None,
-                        service_provider=service_provider,
-                        audio_duration_minutes=audio_duration_minutes,
-                        tokens_used=tokens_used,
-                        response_data=json.dumps(transcription_result, ensure_ascii=False) if transcription_result else None,
-                        confidence_score=confidence_score,
-                        language_detected=language_detected
-                    )
-                    logger.info(f"✅ 응답 저장 완료 - 요청 ID: {request_record.request_id}")
-                except Exception as e:
-                    logger.error(f"❌ 응답 저장 실패 - 요청 ID: {request_record.request_id}, 오류: {str(e)}")
-                    # 응답 저장 실패 시에도 요청 완료 처리
-                    transcription_service.complete_request(
-                        db=db,
-                        request_id=request_record.request_id,
-                        status="completed_with_save_error",
-                        error_message=f"Response save failed: {str(e)}"
-                    )
-                
-                logger.info(f"✅ log ============================== 001")
-                
-            except Exception as db_error:
-                print(f"Failed to save response: {db_error}")
+            except Exception as summary_error:
+                logger.error(f"❌ 요약 처리 중 오류: {str(summary_error)}")
+                print(f"Summary error: {summary_error}")
         
-        # 응답 데이터 구성 (사용자 정보 포함)
-        response_data = {
-            "user_id": None,  # 현재 인증되지 않은 사용자
-            "email": None,    # 현재 인증되지 않은 사용자
-            "request_id": request_record.request_id,
-            "status": "completed",
-            "stt_message": transcribed_text,
-            "stt_summary": summary_text,
-            "service_name": transcription_result.get('service_name', 'unknown'),
-            "processing_time": transcription_result.get('processing_time', processing_time),
-            "original_response": transcription_result
-        }
-        
-        logger.info(f"✅ log ============================== 002")
-        
-        # AssemblyAI 요약이 있는 경우 추가
-        if transcription_result.get('summary'):
-            response_data["assemblyai_summary"] = transcription_result.get('summary')
-            logger.info(f"📝 AssemblyAI 요약 포함됨: {len(transcription_result.get('summary', ''))}자")
-        
-        logger.info(f"✅ log ============================== 003")
-        
-        # API 사용 로그 기록 (성공)
+        # 데이터베이스에 요청 기록 저장
         try:
-            response_size = len(json.dumps(response_data).encode('utf-8'))
-            APIUsageService.log_api_usage(
-                db=db,
-                user_uuid=None,
-                api_key_hash=None,
+            logger.info("💾 데이터베이스 기록 시작...")
+            print("Saving to database...")
+            
+            transcription_service = TranscriptionService(db)
+            
+            # 요청 기록 생성
+            request_record = transcription_service.create_request(
+                user_uuid="anonymous",
+                filename=file.filename,
+                file_size=file_size,
+                service_requested=service_used,
+                language=detected_language,
+                audio_duration=audio_duration,
+                client_ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent", ""),
+                duration=result.get("processing_time", 0.0)
+            )
+            
+            # 응답 기록 생성
+            transcription_service.create_response(
+                request_id=request_record.request_id,
+                transcription_text=transcribed_text,
+                confidence_score=confidence_score,
+                summary_text=summary_text,
+                processing_time=summary_processing_time,
+                service_provider=service_used,
+                duration=result.get("processing_time", 0.0),
+                language_detected=detected_language,
+                audio_duration_minutes=audio_duration / 60.0 if audio_duration else 0.0,
+                response_data=json.dumps(result.get("full_response", {}), ensure_ascii=False) if result.get("full_response") else None
+            )
+            
+            logger.info(f"✅ 데이터베이스 기록 완료 - 요청 ID: {request_record.request_id}")
+            print(f"Database record created: {request_record.request_id}")
+            
+        except Exception as db_error:
+            logger.error(f"❌ 데이터베이스 저장 실패: {str(db_error)}")
+            print(f"Database save failed: {db_error}")
+            # 데이터베이스 오류가 있어도 변환 결과는 반환
+        
+        # API 사용 로그 기록
+        try:
+            logger.info("📊 API 사용 로그 기록 중...")
+            print("Logging API usage...")
+            
+            api_usage_service = APIUsageService(db)
+            api_usage_service.log_usage(
+                user_uuid="anonymous",
                 endpoint="/transcribe/",
                 method="POST",
                 status_code=200,
-                request_size=file_size,
-                response_size=response_size,
-                processing_time=processing_time,
-                ip_address=request.client.host if request.client else None,
-                user_agent=request.headers.get("user-agent")
-            )
-        except Exception as log_error:
-            print(f"Failed to log API usage: {log_error}")
-    
-        logger.info(f"✅ log ============================== 004")
-        
-        return JSONResponse(content=response_data)
-    
-    except HTTPException as he:
-        logger.warning(f"⚠️ HTTP 예외 발생 - 상태 코드: {he.status_code}, 메시지: {he.detail}")
-        # API 사용 로그 기록 (HTTPException)
-        try:
-            logger.info("📊 API 사용 로그 기록 중 (HTTPException)")
-            APIUsageService.log_api_usage(
-                db=db,
-                user_uuid=None,
-                api_key_hash=None,
-                endpoint="/transcribe/",
-                method="POST",
-                status_code=he.status_code,
                 processing_time=time.time() - start_time,
-                ip_address=request.client.host if request.client else None,
-                user_agent=request.headers.get("user-agent")
+                client_ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent", ""),
+                api_key_hash="anonymous"
             )
+            
+            logger.info("✅ API 사용 로그 기록 완료")
+            print("API usage logged")
+            
         except Exception as log_error:
-            logger.error(f"❌ API 사용 로그 기록 실패: {log_error}")
+            logger.error(f"❌ API 사용 로그 기록 실패: {str(log_error)}")
             print(f"Failed to log API usage: {log_error}")
         
-        raise he
+        # 응답 생성
+        response_data = {
+            "success": True,
+            "request_id": request_record.request_id if request_record else None,
+            "service": service_used,
+            "model": transcribe_kwargs.get("model_size", "default"),
+            "text": transcribed_text,
+            "confidence": round(confidence_score, 4),
+            "language": detected_language,
+            "processing_time": round(processing_time, 2),
+            "audio_duration": round(audio_duration, 2),
+            "word_count": len(transcribed_text.split()) if transcribed_text else 0,
+            "character_count": len(transcribed_text),
+            "file_size": file_size,
+            "transcript_id": transcript_id
+        }
+        
+        # 요약이 있는 경우 추가
+        if summary_text:
+            response_data["summary"] = {
+                "text": summary_text,
+                "processing_time": round(summary_processing_time, 2)
+            }
+        
+        # Fast-Whisper 세그먼트 정보 추가
+        if service_used == "fast-whisper" and result.get("full_response", {}).get("segments"):
+            response_data["segments"] = result["full_response"]["segments"]
+        
+        logger.info(f"🎉 전체 처리 완료 - 총 시간: {time.time() - start_time:.2f}초")
+        print(f"Total processing completed in {time.time() - start_time:.2f}s")
+        
+        return response_data
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback as tb
-        logger.error(f"💥 예상치 못한 오류 발생: {type(e).__name__}: {str(e)}")
-        logger.error(f"📍 오류 추적:\n{tb.format_exc()}")
-        print(f"Exception occurred: {type(e).__name__}: {str(e)}")
-        tb.print_exc()
+        error_msg = f"음성 변환 처리 중 예상치 못한 오류가 발생했습니다: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        print(f"Unexpected error: {e}")
         
-        # 요청 실패로 업데이트
-        if request_record:
-            try:
-                logger.info(f"💾 예외 상황 요청 기록 업데이트 중 - ID: {request_record.request_id}")
-                TranscriptionService.complete_request(
-                    db=db,
-                    request_id=request_record.request_id,
-                    status="failed",
-                    error_message=str(e)
-                )
-            except Exception as db_error:
-                logger.error(f"❌ 예외 상황 요청 기록 업데이트 실패: {db_error}")
-                print(f"Failed to update request record: {db_error}")
-        
-        # API 사용 로그 기록 (서버 오류)
+        # 실패 로그 기록
         try:
-            logger.info("📊 API 사용 로그 기록 중 (서버 오류)")
-            APIUsageService.log_api_usage(
-                db=db,
-                user_uuid=None,
-                api_key_hash=None,
+            api_usage_service = APIUsageService(db)
+            api_usage_service.log_usage(
+                user_uuid="anonymous",
                 endpoint="/transcribe/",
                 method="POST",
                 status_code=500,
                 processing_time=time.time() - start_time,
-                ip_address=request.client.host if request.client else None,
-                user_agent=request.headers.get("user-agent")
+                client_ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent", ""),
+                api_key_hash="anonymous"
             )
         except Exception as log_error:
-            logger.error(f"❌ 서버 오류 API 사용 로그 기록 실패: {log_error}")
-            print(f"Failed to log API usage: {log_error}")
+            logger.error(f"❌ 실패 로그 기록 실패: {str(log_error)}")
         
-        logger.error("🔄 HTTP 예외로 변환하여 응답")
-        raise HTTPException(status_code=500, detail="음성 변환 중 예상치 못한 오류가 발생했습니다.")
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/", summary="서비스 상태 확인")
 def read_root():
@@ -1096,7 +995,6 @@ def get_login_stats(days: int = 30, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# API 키로 보호된 transcribe 엔드포인트
 @app.post("/transcribe/protected/", summary="API 키로 보호된 음성 파일 변환")
 async def transcribe_audio_protected(
     request: Request,
@@ -1104,261 +1002,328 @@ async def transcribe_audio_protected(
     service: Optional[str] = None,
     fallback: bool = True,
     summarization: bool = False,
+    # fast-whisper 전용 옵션들
+    model_size: Optional[str] = None,  # tiny, base, small, medium, large-v2, large-v3
+    task: Optional[str] = None,  # transcribe, translate
     # summary_model: str = "informative",
     # summary_type: str = "bullets",
     current_user: str = Depends(verify_api_key_dependency),
     db: Session = Depends(get_db)
 ):
- 
     """
     API 키로 보호된 음성 파일을 텍스트로 변환합니다.
     Authorization 헤더에 Bearer {api_key} 형식으로 API 키를 전달해야 합니다.
-    음성 파일을 업로드하여 텍스트로 변환합니다.
-    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper)를 지원하며 폴백 기능을 제공합니다.
-    요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
-    - **file**: 변환할 음성 파일
-    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper). 미지정시 기본 서비스 사용
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
-    - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
-    - **summarization**: ChatGPT API 요약 기능 사용 여부 (기본값: False, 모든 서비스에서 지원)
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
+    Parameters:
+    - service: 사용할 STT 서비스 ("assemblyai", "daglo", "fast-whisper"). 지정하지 않으면 자동 선택
+    - fallback: 첫 번째 서비스 실패 시 다른 서비스로 자동 전환 여부 (기본값: True)
+    - summarization: ChatGPT API 요약 기능 사용 여부 (기본값: False)
+    - model_size: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
+    - task: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     """
     
     start_time = time.time()
-    transcription_service = TranscriptionService(db)
-    api_usage_service = APIUsageService(db)
+    request_record = None
     
     try:
-        # 파일 확장자 검증
-        allowed_extensions = [".mp3", ".wav", ".m4a", ".flac", ".aac"]
-        file_extension = os.path.splitext(file.filename)[1].lower()
+        logger.info(f"🔐 보호된 음성 변환 요청 시작 - 사용자: {current_user}, 파일: {file.filename}")
+        print(f"Protected transcription request - User: {current_user}, File: {file.filename}")
         
-        if file_extension not in allowed_extensions:
+        # 파일 확장자 확인
+        file_extension = file.filename.split('.')[-1].lower()
+        supported_formats = stt_manager.get_all_supported_formats()
+        
+        logger.info(f"📄 파일 확장자: {file_extension}")
+        print(f"File extension: {file_extension}")
+        
+        if file_extension not in supported_formats:
+            logger.warning(f"❌ 지원하지 않는 파일 형식: {file_extension}")
+            
+            # API 사용 로그 기록 (실패)
+            try:
+                api_usage_service = APIUsageService(db)
+                api_usage_service.log_usage(
+                    user_uuid=current_user,
+                    endpoint="/transcribe/protected/",
+                    method="POST",
+                    status_code=400,
+                    processing_time=time.time() - start_time,
+                    client_ip=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent", ""),
+                    api_key_hash=current_user
+                )
+            except Exception as log_error:
+                logger.error(f"❌ API 사용 로그 기록 실패: {str(log_error)}")
+            
             raise HTTPException(
                 status_code=400, 
-                detail=f"지원되지 않는 파일 형식입니다. 지원 형식: {', '.join(allowed_extensions)}"
+                detail=f"지원하지 않는 파일 형식입니다. 지원 형식: {', '.join(supported_formats)}"
             )
         
         # 파일 내용 읽기
         file_content = await file.read()
+        file_size = len(file_content)
         
-        # 요청 정보 저장 (파일 경로 포함)
-        request_record = transcription_service.create_request(
-            filename=file.filename,  # 주석 해제 및 수정
-            file_size=len(file_content),
-            service_requested=service,
-            fallback_enabled=fallback,
-            client_ip=request.client.host,
-            user_agent=request.headers.get("user-agent", ""),
-            user_uuid=current_user
-        )
+        logger.info(f"📊 파일 크기: {file_size} bytes")
+        print(f"File size: {file_size} bytes")
         
-        # 음성 파일을 지정된 경로에 저장 (요청 정보 저장 전에 수행)
-        stored_file_path = None
+        # 오디오 길이 계산
         try:
-            logger.info(f"💾 음성 파일 저장 시작 - 사용자: {current_user}")
-            stored_file_path = save_uploaded_file(
-                user_uuid=current_user,
-                request_id=request_record.request_id,
-                filename=file.filename,
-                file_content=file_content
-            )
-            logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
-            
-            # 파일 경로를 /stt_storage/부터의 상대 경로로 변환
-            from pathlib import Path
-            relative_path = stored_file_path.replace(str(Path.cwd()), "").replace("\\", "/")
-            if relative_path.startswith("/"):
-                relative_path = relative_path[1:]  # 맨 앞의 / 제거
-               
-            # 3단계: 파일 경로 업데이트
-            transcription_service.update_file_path(
-                db=db, 
-                request_id=request_record.request_id, 
-                file_path=relative_path
-            )               
-                
-        except Exception as storage_error:
-            logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
-            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용        
+            audio_duration = get_audio_duration(file_content, file.filename)
+            logger.info(f"🎵 오디오 길이: {format_duration(audio_duration)}")
+            print(f"Audio duration: {format_duration(audio_duration)}")
+        except Exception as duration_error:
+            logger.warning(f"⚠️ 오디오 길이 계산 실패: {str(duration_error)}")
+            audio_duration = 0.0
         
-        # STT 처리
-        result = stt_manager.transcribe_with_fallback(
-            file_content=file_content,
-            filename=file.filename,
-            preferred_service=service
-        )
+        # 파일 저장
+        try:
+            stored_file_path = save_uploaded_file(file_content, file.filename)
+            logger.info(f"💾 파일 저장 완료: {stored_file_path}")
+            print(f"File saved: {stored_file_path}")
+        except Exception as storage_error:
+            logger.warning(f"⚠️ 파일 저장 실패: {str(storage_error)}")
+            stored_file_path = None
+        
+        # Fast-Whisper 전용 옵션 처리
+        transcribe_kwargs = {}
+        if service == "fast-whisper":
+            if model_size:
+                transcribe_kwargs["model_size"] = model_size
+            if task:
+                transcribe_kwargs["task"] = task
+        
+        # STT 변환 실행
+        if service and service in stt_manager.get_available_services():
+            logger.info(f"🎯 지정된 서비스로 변환 시작: {service}")
+            print(f"Using specified service: {service}")
+            
+            result = stt_manager.transcribe_with_service(
+                service, 
+                file_content, 
+                file.filename, 
+                language_code="ko",
+                **transcribe_kwargs
+            )
+        elif fallback:
+            logger.info(f"🔄 폴백 모드로 변환 시작 (선호 서비스: {service})")
+            print(f"Using fallback mode (preferred: {service})")
+            
+            result = stt_manager.transcribe_with_fallback(
+                file_content, 
+                file.filename, 
+                language_code="ko",
+                preferred_service=service,
+                **transcribe_kwargs
+            )
+        else:
+            logger.info(f"🎯 기본 서비스로 변환 시작")
+            print(f"Using default service")
+            
+            result = stt_manager.transcribe_with_default(
+                file_content, 
+                file.filename, 
+                language_code="ko",
+                **transcribe_kwargs
+            )
+        
+        # 변환 결과 확인
+        if result.get("error"):
+            logger.error(f"❌ STT 변환 실패: {result['error']}")
+            print(f"STT conversion failed: {result['error']}")
+            
+            # API 사용 로그 기록 (실패)
+            try:
+                api_usage_service = APIUsageService(db)
+                api_usage_service.log_usage(
+                    user_uuid=current_user,
+                    endpoint="/transcribe/protected/",
+                    method="POST",
+                    status_code=500,
+                    processing_time=time.time() - start_time,
+                    client_ip=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent", ""),
+                    api_key_hash=current_user
+                )
+            except Exception as log_error:
+                logger.error(f"❌ API 사용 로그 기록 실패: {str(log_error)}")
+            
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        transcribed_text = result.get("text", "")
+        confidence_score = result.get("confidence", 0.0)
+        service_used = result.get("service_name", "unknown")
+        transcript_id = result.get("transcript_id", "")
+        processing_time = result.get("processing_time", 0.0)
+        detected_language = result.get("language_code", "ko")
+        
+        logger.info(f"✅ STT 변환 완료 - 서비스: {service_used}")
+        logger.info(f"📝 변환된 텍스트 길이: {len(transcribed_text)} 문자")
+        logger.info(f"🎯 신뢰도: {confidence_score:.2f}")
+        logger.info(f"⏱️ 처리 시간: {processing_time:.2f}초")
+        print(f"Transcription completed using {service_used}")
+        print(f"Text length: {len(transcribed_text)} characters")
+        print(f"Confidence: {confidence_score:.2f}")
+        print(f"Processing time: {processing_time:.2f}s")
         
         # 요약 처리
         summary_text = None
-        summary_time = 0.0
-        if summarization and result.get("text"):
+        summary_processing_time = 0.0
+        
+        if summarization and transcribed_text.strip():
             try:
+                logger.info("📋 요약 생성 시작...")
+                print("Starting summarization...")
+                
                 summary_start_time = time.time()
-                summary_result = await openai_service.summarize_text(result["text"])
-                summary_time = time.time() - summary_start_time
-                summary_text = summary_result if summary_result else ""
-                logger.info(f"✅ 요약 생성 완료: {len(summary_text) if summary_text else 0}자, 소요시간: {summary_time:.2f}초")
-            except Exception as e:
-                logger.error(f"Summarization failed: {str(e)}")
-                summary_text = "요약 생성 중 오류가 발생했습니다."
+                summary_result = await openai_service.summarize_text(transcribed_text)
+                summary_processing_time = time.time() - summary_start_time
+                
+                # 요약 결과가 문자열인 경우 처리
+                if isinstance(summary_result, str):
+                    summary_text = summary_result
+                    logger.info(f"✅ 요약 생성 완료 - 길이: {len(summary_text)} 문자")
+                    logger.info(f"⏱️ 요약 처리 시간: {summary_processing_time:.2f}초")
+                    print(f"Summary completed - length: {len(summary_text)} characters")
+                elif summary_result and summary_result.get("success"):
+                    summary_text = summary_result.get("summary", "")
+                    logger.info(f"✅ 요약 생성 완료 - 길이: {len(summary_text)} 문자")
+                    logger.info(f"⏱️ 요약 처리 시간: {summary_processing_time:.2f}초")
+                    print(f"Summary completed - length: {len(summary_text)} characters")
+                else:
+                    error_msg = summary_result.get('error', '알 수 없는 오류') if isinstance(summary_result, dict) else '요약 결과가 올바르지 않습니다'
+                    logger.warning(f"⚠️ 요약 생성 실패: {error_msg}")
+                    print(f"Summary failed: {error_msg}")
+                    
+            except Exception as summary_error:
+                logger.error(f"❌ 요약 처리 중 오류: {str(summary_error)}")
+                print(f"Summary error: {summary_error}")
         
-        # 처리 시간 계산
-        processing_time = time.time() - start_time
-        
-        # STT 시간 + 요약 시간을 분 단위로 계산
-        stt_processing_time = result.get("processing_time", processing_time - summary_time)
-        total_processing_time = stt_processing_time + summary_time
-        audio_duration_minutes = round(total_processing_time / 60.0, 2)
-        
-        # 토큰 사용량 계산 (1분당 1점)
-        tokens_used = round(audio_duration_minutes * 1.0, 2)
-        
-        # STT 결과에서 confidence와 language_code 추출
-        confidence_score = result.get('confidence')
-        language_detected = result.get('language_code')
-        
-        # 응답 정보 저장 (새로운 컬럼들 포함)
-        response_record = transcription_service.create_response(
-            request_id=request_record.request_id,
-            transcription_text=result.get("text", ""),  # STT 매니저는 'text' 필드를 사용
-            summary_text=summary_text,
-            service_used=result.get("service_name", ""),  # STT 매니저는 'service_name' 필드를 사용
-            processing_time=processing_time,
-            duration=processing_time,
-            success=True,
-            error_message=None,
-            service_provider=result.get("service_name", ""),
-            audio_duration_minutes=audio_duration_minutes,
-            tokens_used=tokens_used,
-            response_data=json.dumps(result, ensure_ascii=False) if result else None,
-            confidence_score=confidence_score,
-            language_detected=language_detected
-        )
-
-        # response_rid 업데이트 추가
-        # TranscriptionService.update_request_with_rid(
-        #     db=db,
-        #     request_id=request_record.request_id,
-        #     response_rid=str(response_record.id)
-        # )
-        
-        transcript_id = result.get('transcript_id')
-        if transcript_id:
-            try:
-                logger.info(f"💾 response_rid 업데이트 중 - ID: {request_record.request_id}, RID: {transcript_id}")
-                TranscriptionService.update_request_with_rid(db, request_record.request_id, transcript_id)
-                logger.info(f"✅ response_rid 업데이트 완료")
-            except Exception as rid_error:
-                logger.error(f"❌ response_rid 업데이트 실패: {rid_error}")                
-        
-        logger.info("💾 response_rid -------------------------------0 ")
-        logger.info(f"💾 response_rid RID: {transcript_id}")
+        # 데이터베이스에 요청 기록 저장
+        try:
+            logger.info("💾 데이터베이스 기록 시작...")
+            print("Saving to database...")
             
-        # 요청 완료 상태로 업데이트
-        TranscriptionService.complete_request(
-            db=db,
-            request_id=request_record.request_id,
-            status="completed"
-        )
+            transcription_service = TranscriptionService(db)
+            
+            # 요청 기록 생성
+            request_record = transcription_service.create_request(
+                user_uuid=current_user,
+                filename=file.filename,
+                file_size=file_size,
+                service_requested=service_used,
+                language=detected_language,
+                audio_duration=audio_duration,
+                client_ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent", ""),
+                duration=result.get("processing_time", 0.0)
+            )
+            
+            # 응답 기록 생성
+            transcription_service.create_response(
+                request_id=request_record.request_id,
+                transcription_text=transcribed_text,
+                confidence_score=confidence_score,
+                summary_text=summary_text,
+                processing_time=summary_processing_time,
+                service_provider=service_used,
+                duration=result.get("processing_time", 0.0),
+                language_detected=detected_language,
+                audio_duration_minutes=audio_duration / 60.0 if audio_duration else 0.0,
+                response_data=json.dumps(result.get("full_response", {}), ensure_ascii=False) if result.get("full_response") else None
+            )
+            
+            logger.info(f"✅ 데이터베이스 기록 완료 - 요청 ID: {request_record.request_id}")
+            print(f"Database record created: {request_record.request_id}")
+            
+        except Exception as db_error:
+            logger.error(f"❌ 데이터베이스 저장 실패: {str(db_error)}")
+            print(f"Database save failed: {db_error}")
+            # 데이터베이스 오류가 있어도 변환 결과는 반환
         
-        # API 사용 로그 저장
-        api_usage_service.log_usage(
-            user_uuid=current_user,
-            endpoint="/transcribe/protected/",
-            method="POST",
-            status_code=200,
-            processing_time=processing_time,
-            client_ip=request.client.host,
-            user_agent=request.headers.get("user-agent", "")
-        )
+        # API 사용 로그 기록
+        try:
+            logger.info("📊 API 사용 로그 기록 중...")
+            print("Logging API usage...")
+            
+            api_usage_service = APIUsageService(db)
+            api_usage_service.log_usage(
+                user_uuid=current_user,
+                endpoint="/transcribe/protected/",
+                method="POST",
+                status_code=200,
+                processing_time=time.time() - start_time,
+                client_ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent", ""),
+                api_key_hash=current_user
+            )
+            
+            logger.info("✅ API 사용 로그 기록 완료")
+            print("API usage logged")
+            
+        except Exception as log_error:
+            logger.error(f"❌ API 사용 로그 기록 실패: {str(log_error)}")
+            print(f"Failed to log API usage: {log_error}")
         
-        return {
-            "status": "success",
-            "transcription": result.get("text", ""),
-            "summary": summary_text,
-            "service_used": result.get("service_name", ""),
-            "duration": result.get("duration", 0),
+        # 응답 생성
+        response_data = {
+            "success": True,
+            "request_id": request_record.request_id if request_record else None,
+            "service": service_used,
+            "model": transcribe_kwargs.get("model_size", "default"),
+            "text": transcribed_text,
+            "confidence": round(confidence_score, 4),
+            "language": detected_language,
             "processing_time": round(processing_time, 2),
-            "audio_duration_minutes": audio_duration_minutes,
-            "tokens_used": tokens_used,
-            "user_uuid": current_user,
-            "filename": file.filename,
-            "request_id": request_record.request_id,
-            "response_id": response_record.id
+            "audio_duration": round(audio_duration, 2),
+            "word_count": len(transcribed_text.split()) if transcribed_text else 0,
+            "character_count": len(transcribed_text),
+            "file_size": file_size,
+            "transcript_id": transcript_id,
+            "user": current_user
         }
+        
+        # 요약이 있는 경우 추가
+        if summary_text:
+            response_data["summary"] = {
+                "text": summary_text,
+                "processing_time": round(summary_processing_time, 2)
+            }
+        
+        # Fast-Whisper 세그먼트 정보 추가
+        if service_used == "fast-whisper" and result.get("full_response", {}).get("segments"):
+            response_data["segments"] = result["full_response"]["segments"]
+        
+        logger.info(f"🎉 전체 처리 완료 - 총 시간: {time.time() - start_time:.2f}초")
+        print(f"Total processing completed in {time.time() - start_time:.2f}s")
+        
+        return response_data
         
     except HTTPException:
         raise
     except Exception as e:
-        processing_time = time.time() - start_time
-
-        # 실패한 경우에도 응답 기록 저장
-        if 'request_record' in locals():
-            try:
-                error_response = transcription_service.create_response(
-                    request_id=request_record.request_id,
-                    transcription_text="",
-                    summary_text=None,
-                    service_used="",
-                    processing_time=processing_time,
-                    duration=processing_time,
-                    success=False,
-                    error_message=str(e),
-                    service_provider="",
-                    audio_duration_minutes=0.0,
-                    tokens_used=0.0,
-                    confidence_score=None,
-                    language_detected=None
-                )
-                
-                # 실패 케이스에서도 response_rid 업데이트
-                # TranscriptionService.update_request_with_rid(
-                #     db=db,
-                #     request_id=request_record.request_id,
-                #     response_rid=str(error_response.id)
-                # )
-                
-                # transcript_id(response_rid) 저장
-                transcript_id = result.get('transcript_id')
-                if transcript_id:
-                    try:
-                        logger.info(f"💾 response_rid 업데이트 중 - ID: {request_record.request_id}, RID: {transcript_id}")
-                        TranscriptionService.update_request_with_rid(db, request_record.request_id, transcript_id)
-                        logger.info(f"✅ response_rid 업데이트 완료")
-                    except Exception as rid_error:
-                        logger.error(f"❌ response_rid 업데이트 실패: {rid_error}")                
-                
-                logger.info("💾 response_rid -------------------------------1 ")
-                logger.info(f"💾 response_rid RID: {transcript_id}")
-
-                # 요청을 실패 상태로 완료 처리
-                TranscriptionService.complete_request(
-                    db=db,
-                    request_id=request_record.request_id,
-                    status="failed",
-                    error_message=str(e)
-                )
-            except Exception as db_error:
-                logger.error(f"❌ 응답 저장 실패: {db_error}")
+        error_msg = f"보호된 음성 변환 처리 중 예상치 못한 오류가 발생했습니다: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        print(f"Unexpected error: {e}")
         
-        # API 사용 로그 저장
-        api_usage_service.log_usage(
-            user_uuid=current_user,
-            endpoint="/transcribe/protected/",
-            method="POST",
-            status_code=500,
-            processing_time=processing_time,
-            client_ip=request.client.host,
-            user_agent=request.headers.get("user-agent", "")
-        )
+        # 실패 로그 기록
+        try:
+            api_usage_service = APIUsageService(db)
+            api_usage_service.log_usage(
+                user_uuid=current_user,
+                endpoint="/transcribe/protected/",
+                method="POST",
+                status_code=500,
+                processing_time=time.time() - start_time,
+                client_ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent", ""),
+                api_key_hash=current_user
+            )
+        except Exception as log_error:
+            logger.error(f"❌ 실패 로그 기록 실패: {str(log_error)}")
         
-        logger.error(f"Transcription error: {str(e)}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=error_msg)
 
 if __name__ == "__main__":
     import logging

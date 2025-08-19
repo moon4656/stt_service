@@ -217,19 +217,17 @@ async def transcribe_audio(
 ):
     """
     음성 파일을 업로드하여 텍스트로 변환합니다.
-    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper)를 지원하며 폴백 기능을 제공합니다.
+    다중 STT 서비스(AssemblyAI, Daglo)를 지원하며 폴백 기능을 제공합니다.
     요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
     - **file**: 변환할 음성 파일
-    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper). 미지정시 기본 서비스 사용
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
+    - **service**: 사용할 STT 서비스 (assemblyai, daglo). 미지정시 기본 서비스 사용
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
     - **summarization**: ChatGPT API 요약 기능 사용 여부 (기본값: False, 모든 서비스에서 지원)
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
+    - **summary_model**: 사용되지 않음 (ChatGPT API 사용)
+    - **summary_type**: 사용되지 않음 (ChatGPT API 사용)
     """
-
+    
     start_time = time.time()
     request_record = None
     
@@ -288,15 +286,38 @@ async def transcribe_audio(
             print(f"Warning: Could not calculate audio duration")
             duration = None  # 체크 제약 조건을 위해 None으로 설정
         
+        # 음성 파일을 지정된 경로에 저장 (데이터베이스 기록 전에 수행)
+        stored_file_path = None
+        try:
+            logger.info(f"💾 음성 파일 저장 시작")
+            stored_file_path = save_uploaded_file(
+                user_uuid="anonymous",
+                request_id="temp",
+                filename=file.filename,
+                file_content=file_content
+            )
+            logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
+            print(f"✅ Audio file saved to: {stored_file_path}")
+            
+            # 파일 경로를 /stt_storage/부터의 상대 경로로 변환
+            from pathlib import Path
+            relative_path = stored_file_path.replace(str(Path.cwd()), "/").replace("\\", "/")
+            # if relative_path.startswith("/"):
+            #    relative_path = relative_path[1:]  # 맨 앞의 / 제거
+                
+        except Exception as storage_error:
+            logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
+            print(f"❌ Failed to save audio file: {storage_error}")
+            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용
+        
         # 데이터베이스에 요청 기록 (파일 경로 포함)
-        request_record = None  # 초기화
         try:
             logger.info("💾 데이터베이스에 요청 기록 생성 중...")
             print(f"Attempting to create request record...")
             print(f"DB session: {db}")
             transcription_service = TranscriptionService(db)
             request_record = transcription_service.create_request(
-                filename=file.filename,  # 수정됨
+                filename=relative_path,  # 전체 경로로 변경
                 file_size=file_size,
                 service_requested=service,
                 fallback_enabled=fallback,
@@ -311,45 +332,6 @@ async def transcribe_audio(
             print(f"Error type: {type(db_error)}")
             import traceback
             traceback.print_exc()
-            # 요청 기록 생성 실패 시 HTTP 예외 발생
-            raise HTTPException(
-                status_code=500, 
-                detail="요청 기록 생성에 실패했습니다. 다시 시도해 주세요."
-            )        
-        
-        # 음성 파일을 지정된 경로에 저장 (데이터베이스 기록 전에 수행)
-        stored_file_path = None
-        try:
-            logger.info(f"💾 음성 파일 저장 시작")
-            transcription_service = TranscriptionService(db)
-            stored_file_path = save_uploaded_file(
-                user_uuid="anonymous",
-                request_id=request_record.request_id,
-                filename=file.filename,
-                file_content=file_content
-            )
-            logger.info(f"✅ 음성 파일 저장 완료 - 경로: {stored_file_path}")
-            print(f"✅ Audio file saved to: {stored_file_path}")
-            
-            # 파일 경로를 /stt_storage/부터의 상대 경로로 변환
-            from pathlib import Path
-            relative_path = stored_file_path.replace(str(Path.cwd()), "/").replace("\\", "/")
-            if relative_path.startswith("/stt_storage"):
-                relative_path = relative_path[1:]  # 맨 앞의 / 제거
-                
-            # 3단계: 파일 경로 업데이트
-            transcription_service.update_file_path(
-                db=db,
-                request_id=request_record.request_id, 
-                file_path=relative_path
-            )
-                
-        except Exception as storage_error:
-            logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
-            print(f"❌ Failed to save audio file: {storage_error}")
-            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용
-        
-
         
         # STT 서비스를 사용하여 음성 변환 수행
         logger.info(f"🚀 STT 변환 시작 - 서비스: {service or '기본값'}, 폴백: {fallback}")
@@ -1109,24 +1091,17 @@ async def transcribe_audio_protected(
     current_user: str = Depends(verify_api_key_dependency),
     db: Session = Depends(get_db)
 ):
- 
     """
     API 키로 보호된 음성 파일을 텍스트로 변환합니다.
     Authorization 헤더에 Bearer {api_key} 형식으로 API 키를 전달해야 합니다.
-    음성 파일을 업로드하여 텍스트로 변환합니다.
-    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper)를 지원하며 폴백 기능을 제공합니다.
-    요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
-    - **file**: 변환할 음성 파일
-    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper). 미지정시 기본 서비스 사용
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
-    - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
-    - **summarization**: ChatGPT API 요약 기능 사용 여부 (기본값: False, 모든 서비스에서 지원)
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
+    Parameters:
+    - service: 사용할 STT 서비스 ("assemblyai" 또는 "daglo"). 지정하지 않으면 자동 선택
+    - fallback: 첫 번째 서비스 실패 시 다른 서비스로 자동 전환 여부 (기본값: True)
+    - summarization: 요약 기능 사용 여부 (ChatGPT API 사용)
+    - summary_model: 요약 모델 (사용되지 않음 - ChatGPT API 사용)
+    - summary_type: 요약 타입 (사용되지 않음 - ChatGPT API 사용)
     """
-    
     start_time = time.time()
     transcription_service = TranscriptionService(db)
     api_usage_service = APIUsageService(db)
@@ -1145,24 +1120,13 @@ async def transcribe_audio_protected(
         # 파일 내용 읽기
         file_content = await file.read()
         
-        # 요청 정보 저장 (파일 경로 포함)
-        request_record = transcription_service.create_request(
-            filename=file.filename,  # 주석 해제 및 수정
-            file_size=len(file_content),
-            service_requested=service,
-            fallback_enabled=fallback,
-            client_ip=request.client.host,
-            user_agent=request.headers.get("user-agent", ""),
-            user_uuid=current_user
-        )
-        
         # 음성 파일을 지정된 경로에 저장 (요청 정보 저장 전에 수행)
         stored_file_path = None
         try:
             logger.info(f"💾 음성 파일 저장 시작 - 사용자: {current_user}")
             stored_file_path = save_uploaded_file(
                 user_uuid=current_user,
-                request_id=request_record.request_id,
+                request_id="temp",
                 filename=file.filename,
                 file_content=file_content
             )
@@ -1173,17 +1137,21 @@ async def transcribe_audio_protected(
             relative_path = stored_file_path.replace(str(Path.cwd()), "").replace("\\", "/")
             if relative_path.startswith("/"):
                 relative_path = relative_path[1:]  # 맨 앞의 / 제거
-               
-            # 3단계: 파일 경로 업데이트
-            transcription_service.update_file_path(
-                db=db, 
-                request_id=request_record.request_id, 
-                file_path=relative_path
-            )               
                 
         except Exception as storage_error:
             logger.error(f"❌ 음성 파일 저장 실패: {storage_error}")
-            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용        
+            relative_path = file.filename  # 저장 실패 시 원본 파일명 사용
+        
+        # 요청 정보 저장 (파일 경로 포함)
+        request_record = transcription_service.create_request(
+            filename=relative_path,  # 전체 경로로 변경
+            file_size=len(file_content),
+            service_requested=service,
+            fallback_enabled=fallback,
+            client_ip=request.client.host,
+            user_agent=request.headers.get("user-agent", ""),
+            user_uuid=current_user  # user_uuid 전달 추가
+        )
         
         # STT 처리
         result = stt_manager.transcribe_with_fallback(
