@@ -3,6 +3,7 @@ from stt_service_interface import STTServiceInterface
 from assemblyai_service import AssemblyAIService
 from daglo_service import DagloService
 from fast_whisper_service import FastWhisperService
+from deepgram_service import DeepgramService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,19 @@ class STTManager:
                 logger.warning("Daglo 서비스가 설정되지 않았습니다.")
         except Exception as e:
             logger.error(f"Daglo 서비스 초기화 실패: {e}")
+        
+        # Deepgram 서비스 추가
+        try:
+            deepgram = DeepgramService()
+            if deepgram.is_configured():
+                self.services["deepgram"] = deepgram
+                if not self.default_service:
+                    self.default_service = "deepgram"
+                logger.info("Deepgram 서비스가 초기화되었습니다.")
+            else:
+                logger.warning("Deepgram 서비스가 설정되지 않았습니다.")
+        except Exception as e:
+            logger.error(f"Deepgram 서비스 초기화 실패: {e}")
         
         if not self.services:
             logger.error("사용 가능한 STT 서비스가 없습니다.")

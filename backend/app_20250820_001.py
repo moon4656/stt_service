@@ -145,7 +145,7 @@ async def lifespan(app: FastAPI):
 # FastAPI 앱 초기화
 app = FastAPI(
     title="Speech-to-Text Service", 
-    description="다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram)를 지원하는 음성-텍스트 변환 서비스",
+    description="다중 STT 서비스(AssemblyAI, Daglo)를 지원하는 음성-텍스트 변환 서비스",
     lifespan=lifespan
 )
 
@@ -217,11 +217,11 @@ async def transcribe_audio(
 ):
     """
     음성 파일을 업로드하여 텍스트로 변환합니다.
-    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram)를 지원하며 폴백 기능을 제공합니다.
+    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper)를 지원하며 폴백 기능을 제공합니다.
     요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
     - **file**: 변환할 음성 파일
-    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper, deepgram). 미지정시 기본 서비스 사용
+    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper). 미지정시 기본 서비스 사용
     - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
     - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
@@ -1093,11 +1093,11 @@ async def transcribe_audio_protected(
     API 키로 보호된 음성 파일을 텍스트로 변환합니다.
     Authorization 헤더에 Bearer {api_key} 형식으로 API 키를 전달해야 합니다.
     음성 파일을 업로드하여 텍스트로 변환합니다.
-    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram)를 지원하며 폴백 기능을 제공합니다.
+    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper)를 지원하며 폴백 기능을 제공합니다.
     요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
     - **file**: 변환할 음성 파일
-    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper, deepgram). 미지정시 기본 서비스 사용
+    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper). 미지정시 기본 서비스 사용
     - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
     - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)

@@ -62,13 +62,8 @@ class TranscriptionService:
                        language_detected: Optional[str] = None) -> TranscriptionResponse:
         """음성 변환 응답을 저장합니다 (새로운 컬럼들 포함)."""
 
-        logger.info(f"✅ transcription_text ============================== {transcription_text}")
-
         word_count = len(transcription_text.split()) if transcription_text else 0
-        
-        logger.info(f"✅ word_count ============================== {word_count}")
-        logger.info(f"✅ audio_duration_minutes ============================== {audio_duration_minutes}")
-        
+
         response = TranscriptionResponse(
             request_id=request_id,
             transcribed_text=transcription_text,
@@ -82,10 +77,7 @@ class TranscriptionService:
             audio_duration_minutes=audio_duration_minutes,
             tokens_used=tokens_used
         )
-        logger.info(f"✅ response Test ============================== 1")
-        
-        logger.info(f"✅ response ============================== {response}")
-        
+
         try:
             self.db.add(response)
             self.db.commit()
@@ -167,8 +159,6 @@ class TranscriptionService:
         duration = None
         word_count = 0
         
-        logger.info(f"✅ daglo_response ============================== {daglo_response}")
-        
         # Daglo API 응답 구조에 따라 데이터 추출 (sttResults.transcript 우선)
         if 'sttResults' in daglo_response and daglo_response['sttResults']:
             stt_results = daglo_response['sttResults']
@@ -181,11 +171,7 @@ class TranscriptionService:
         elif "text" in daglo_response:
             transcribed_text = daglo_response["text"]
         
-        logger.info(f"✅ daglo_response transcribed_text ============================== {transcribed_text}")
-        
         word_count = len(transcribed_text.split()) if transcribed_text else 0
-        
-        logger.info(f"✅ daglo_response word_count ============================== {word_count}")
         
         if "confidence" in daglo_response:
             confidence_score = daglo_response["confidence"]
@@ -195,8 +181,6 @@ class TranscriptionService:
         
         if "duration" in daglo_response:
             duration = daglo_response["duration"]
-        
-        logger.info(f"✅ daglo_response test ============================== 001")
         
         # response_data 크기 제한 (최대 50KB)
         response_data_str = json.dumps(daglo_response, ensure_ascii=False)
@@ -224,9 +208,6 @@ class TranscriptionService:
             word_count=word_count,
             response_data=response_data_str
         )
-        
-        logger.info(f"✅ daglo_response test ============================== 002")
-        logger.info(f"✅ daglo_response response ============================== {response}")
         
         try:
             db.add(response)
