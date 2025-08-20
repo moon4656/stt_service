@@ -362,6 +362,26 @@ class TokenPayment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-
+class OveragePayment(Base):
+    """서비스초과결재 테이블 - 서비스 초과 사용량에 대한 결재 상세 정보
     
+    사용자가 구독 요금제의 포함 한도를 초과하여 사용한 서비스에 대한 결재 내역을 저장합니다.
+    초과 사용량, 단가, 초과 단가 등의 정보를 포함하며, 초과 사용료 계산의 기준이 됩니다.
+    """
+    __tablename__ = "overage_payments"
     
+    id = Column(Integer, primary_key=True, index=True)  # 서비스초과결재 고유 식별자 (자동 증가)
+    payment_id = Column(String(50), ForeignKey('payments.payment_id'), nullable=False, index=True)  # 결재번호 (payments.payment_id 참조)
+    plan_code = Column(String(50), nullable=False, index=True)  # 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
+    unit_price = Column(Integer, nullable=False)  # 기본 단가 (원 단위, 분당 기본 요금)
+    overage_unit_price = Column(Integer, nullable=False)  # 초과 단가 (원 단위, 분당 초과 요금)
+    overage_tokens = Column(Float, nullable=False)  # 초과 토큰/시간 (분 단위)
+    amount = Column(Integer, nullable=False)  # 총 초과 사용료 금액 (원 단위)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 레코드 생성 시간
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())  # 레코드 수정 시간
+    
+    # 인덱스 추가 (결재번호별 조회 최적화)
+    __table_args__ = (
+        Index('idx_overage_payment_id', 'payment_id'),
+        Index('idx_overage_plan_code', 'plan_code'),
+    )

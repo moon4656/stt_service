@@ -129,7 +129,7 @@ class TranscriptionService:
             request = db.query(TranscriptionRequest).filter(TranscriptionRequest.request_id == request_id).first()
             
             if request:
-                request.file_path = file_path
+                request.filename = file_path
                 db.commit()
                 logger.info(f"✅ 파일 경로 업데이트 완료 - ID: {request_id}, Path: {file_path}")
                 return True

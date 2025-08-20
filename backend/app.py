@@ -226,8 +226,6 @@ async def transcribe_audio(
     - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
     - **summarization**: ChatGPT API 요약 기능 사용 여부 (기본값: False, 모든 서비스에서 지원)
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     """
 
     start_time = time.time()
@@ -334,7 +332,7 @@ async def transcribe_audio(
             # 파일 경로를 /stt_storage/부터의 상대 경로로 변환
             from pathlib import Path
             relative_path = stored_file_path.replace(str(Path.cwd()), "/").replace("\\", "/")
-            if relative_path.startswith("/stt_storage"):
+            if relative_path.startswith("//stt_storage"):
                 relative_path = relative_path[1:]  # 맨 앞의 / 제거
                 
             # 3단계: 파일 경로 업데이트
@@ -420,7 +418,7 @@ async def transcribe_audio(
         # 변환된 텍스트 추출
         transcribed_text = transcription_result.get('text', '')
         
-        logger.info(f"✅ transcription_result ============================== {transcription_result}")
+        # logger.info(f"✅ transcription_result ============================== {transcription_result}")
 
         
         # 빈 텍스트 처리 (테스트를 위해 정상 처리로 변경)
@@ -479,22 +477,14 @@ async def transcribe_audio(
                 # stt_processing_time = transcription_result.get('processing_time', 0)
                 total_processing_time = processing_time + summary_time
                 
-                logger.info(f"✅ audio_duration ============================== {duration_seconds}")
-                logger.info(f"✅ summary_time ============================== {summary_time}")
-                logger.info(f"✅ total_processing_time ============================== {total_processing_time}")
-
                 # STT 시간 + 요약 시간을 분 단위로 계산
                 audio_duration_minutes = round(total_processing_time / 60, 2)
-                logger.info(f"✅ audio_duration_minutes ============================== {audio_duration_minutes}")
                 
                 # 토큰 사용량 계산 (1분당 1점)
                 tokens_used = round(audio_duration_minutes * 1.0, 2)
-                logger.info(f"✅ tokens_used ============================== {tokens_used}")
                 
                 # 서비스 제공업체 정보
                 service_provider = transcription_result.get('service_name', 'unknown')
-                
-                logger.info(f"✅ service_provider ============================== {service_provider}")
                 
                 try:
                     # STT 결과에서 confidence와 language_code 추출
@@ -527,9 +517,7 @@ async def transcribe_audio(
                         status="completed_with_save_error",
                         error_message=f"Response save failed: {str(e)}"
                     )
-                
-                logger.info(f"✅ log ============================== 001")
-                
+                               
             except Exception as db_error:
                 print(f"Failed to save response: {db_error}")
         
@@ -546,15 +534,11 @@ async def transcribe_audio(
             "original_response": transcription_result
         }
         
-        logger.info(f"✅ log ============================== 002")
-        
         # AssemblyAI 요약이 있는 경우 추가
         if transcription_result.get('summary'):
             response_data["assemblyai_summary"] = transcription_result.get('summary')
             logger.info(f"📝 AssemblyAI 요약 포함됨: {len(transcription_result.get('summary', ''))}자")
-        
-        logger.info(f"✅ log ============================== 003")
-        
+                
         # API 사용 로그 기록 (성공)
         try:
             response_size = len(json.dumps(response_data).encode('utf-8'))
@@ -574,8 +558,6 @@ async def transcribe_audio(
         except Exception as log_error:
             print(f"Failed to log API usage: {log_error}")
     
-        logger.info(f"✅ log ============================== 004")
-        
         return JSONResponse(content=response_data)
     
     except HTTPException as he:
@@ -1123,8 +1105,6 @@ async def transcribe_audio_protected(
     - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
     - **summarization**: ChatGPT API 요약 기능 사용 여부 (기본값: False, 모든 서비스에서 지원)
-    - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
-    - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     """
     
     start_time = time.time()

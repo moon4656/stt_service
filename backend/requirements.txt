@@ -28,5 +28,6 @@ httpx==0.26.0
 
 # Audio processing
 mutagen==1.47.0  # Audio metadata and duration extraction
+faster-whisper==1.0.3  # Fast Whisper STT service
 # pydub==0.25.1
 # librosa==0.10.1

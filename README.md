@@ -33,10 +33,12 @@
    python -m venv venv
    
    # 가상환경 활성화 (Windows)
-   venv\Scripts\activate
+   # venv\Scripts\activate
+   python -m venv venv
+   /venv/Scripts/Activate.ps1
    
    # 가상환경 활성화 (macOS/Linux)
-   source venv/bin/activate
+   # source venv/bin/activate
    
    # 패키지 설치
    python.exe -m pip install --upgrade pip
@@ -260,5 +262,10 @@ stt_storage/
 
 # 5단계: 원격 저장소에 푸시
 - git push origin main
+
+# Personal Access Token 사용 
+- git remote set-url origin https://[moonsoo-dx]:[TOKEN]@github.com/moonsoo-dx/stt_service.git
+
+
 
 MIT
