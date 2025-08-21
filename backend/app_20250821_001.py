@@ -3,7 +3,6 @@ import requests
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from dotenv import load_dotenv
@@ -143,70 +142,12 @@ async def lifespan(app: FastAPI):
     logger.info("🔄 Application shutting down")
     print("🔄 Application shutting down")
 
-# API 사용 로그 미들웨어
-class APIUsageMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        start_time = time.time()
-        
-        # 요청 크기 계산
-        request_size = 0
-        if hasattr(request, 'body'):
-            try:
-                body = await request.body()
-                request_size = len(body)
-                # body를 다시 읽을 수 있도록 설정
-                request._body = body
-            except:
-                request_size = 0
-        
-        # 응답 처리
-        response = await call_next(request)
-        
-        # 처리 시간 계산
-        processing_time = time.time() - start_time
-        
-        # GET, POST 요청에 대해서만 로그 기록
-        if request.method in ["GET", "POST"]:
-            try:
-                # 데이터베이스 세션 생성
-                from database import SessionLocal
-                db = SessionLocal()
-                
-                try:
-                    # API 사용 로그 기록
-                    APIUsageService.log_api_usage(
-                        db=db,
-                        user_uuid=None,  # 미들웨어에서는 사용자 정보를 알 수 없음
-                        api_key_hash=None,
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                        status_code=response.status_code,
-                        request_size=request_size,
-                        response_size=getattr(response, 'content_length', 0) or 0,
-                        processing_time=processing_time,
-                        ip_address=request.client.host if request.client else None,
-                        user_agent=request.headers.get("user-agent")
-                    )
-                    db.commit()
-                except Exception as log_error:
-                    logger.error(f"API 사용 로그 기록 실패: {log_error}")
-                    db.rollback()
-                finally:
-                    db.close()
-            except Exception as e:
-                logger.error(f"미들웨어에서 오류 발생: {e}")
-        
-        return response
-
 # FastAPI 앱 초기화
 app = FastAPI(
     title="Speech-to-Text Service", 
-    description="다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram, Tiro)를 지원하는 음성-텍스트 변환 서비스",
+    description="다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram)를 지원하는 음성-텍스트 변환 서비스",
     lifespan=lifespan
 )
-
-# 미들웨어 추가
-app.add_middleware(APIUsageMiddleware)
 
 # Pydantic 모델들
 class UserCreate(BaseModel):
@@ -276,11 +217,11 @@ async def transcribe_audio(
 ):
     """
     음성 파일을 업로드하여 텍스트로 변환합니다.
-    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram, Tiro)를 지원하며 폴백 기능을 제공합니다.
+    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram)를 지원하며 폴백 기능을 제공합니다.
     요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
     - **file**: 변환할 음성 파일
-    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper, deepgram, tiro). 미지정시 기본 서비스 사용
+    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper, deepgram). 미지정시 기본 서비스 사용
     - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
     - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)
@@ -1152,11 +1093,11 @@ async def transcribe_audio_protected(
     API 키로 보호된 음성 파일을 텍스트로 변환합니다.
     Authorization 헤더에 Bearer {api_key} 형식으로 API 키를 전달해야 합니다.
     음성 파일을 업로드하여 텍스트로 변환합니다.
-    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram, Tiro)를 지원하며 폴백 기능을 제공합니다.
+    다중 STT 서비스(AssemblyAI, Daglo, Fast-Whisper, Deepgram)를 지원하며 폴백 기능을 제공합니다.
     요청과 응답 내역이 PostgreSQL에 저장됩니다.
     
     - **file**: 변환할 음성 파일
-    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper, deepgram, tiro). 미지정시 기본 서비스 사용
+    - **service**: 사용할 STT 서비스 (assemblyai, daglo, fast-whisper, deepgram). 미지정시 기본 서비스 사용
     - **model_size**: Fast-Whisper 모델 크기 (tiny, base, small, medium, large-v2, large-v3)
     - **task**: Fast-Whisper 작업 유형 (transcribe: 전사, translate: 영어 번역)
     - **fallback**: 실패시 다른 서비스로 폴백 여부 (기본값: True)

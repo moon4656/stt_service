@@ -47,7 +47,11 @@
    ```
 
 3. 환경 변수 설정
-   - `.env` 파일을 열고 `DAGLO_API_KEY` 값을 실제 API 키로 변경합니다.
+   - `.env` 파일을 열고 다음 API 키 값을 실제 API 키로 변경합니다:
+     - `DAGLO_API_KEY`: Daglo API 서비스 사용을 위한 API 키
+     - `ASSEMBLYAI_API_KEY`: AssemblyAI 서비스 사용을 위한 API 키
+     - `DEEPGRAM_API_KEY`: Deepgram 서비스 사용을 위한 API 키
+     - `TIRO_API_KEY`: Tiro 서비스 사용을 위한 API 키
 
 ## 실행 방법
 
@@ -106,14 +110,26 @@ python text_to_speech.py meeting_scripts/meeting_20250812_112132.txt --use-real-
 
 **예시 (curl)**:
 ```bash
+# 기본 서비스 사용
 curl -X POST "http://localhost:8000/transcribe/" -F "file=@/path/to/audio/file.mp3"
+
+# 특정 서비스 지정 (Tiro 서비스 사용)
+curl -X POST "http://localhost:8000/transcribe/?service=tiro" -F "file=@/path/to/audio/file.mp3"
 ```
 
 **예시 (Python)**:
 ```python
 import requests
 
+# 기본 서비스 사용
 url = "http://localhost:8000/transcribe/"
+files = {"file": open("audio_file.mp3", "rb")}
+
+response = requests.post(url, files=files)
+print(response.json())
+
+# 특정 서비스 지정 (Tiro 서비스 사용)
+url = "http://localhost:8000/transcribe/?service=tiro"
 files = {"file": open("audio_file.mp3", "rb")}
 
 response = requests.post(url, files=files)
