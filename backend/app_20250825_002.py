@@ -7,7 +7,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from dotenv import load_dotenv
-from decimal import Decimal
 import uvicorn
 import time
 import traceback
@@ -284,13 +283,13 @@ class OveragePaymentCreate(BaseModel):
 class ServiceTokenCreate(BaseModel):
     user_uuid: str
     token_id: str
-    quota_tokens: Decimal
+    quota_tokens: float
     token_expiry_date: str  # YYYY-MM-DD 형식
     status: str = "active"
 
 class ServiceTokenUpdate(BaseModel):
-    quota_tokens: Optional[Decimal] = None
-    used_tokens: Optional[Decimal] = None
+    quota_tokens: Optional[float] = None
+    used_tokens: Optional[float] = None
     token_expiry_date: Optional[str] = None
     status: Optional[str] = None
 
@@ -2408,7 +2407,7 @@ def create_service_token(service_token: ServiceTokenCreate, current_user: str = 
         new_service_token = ServiceToken(
             user_uuid=service_token.user_uuid,
             quota_tokens=service_token.quota_tokens,
-            used_tokens=Decimal('0.0'),  # Decimal 타입으로 초기값 설정
+            used_tokens=0.0,  # 초기값
             token_expiry_date=service_token.token_expiry_date,
             status=service_token.status
         )
