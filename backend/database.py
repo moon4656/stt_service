@@ -45,7 +45,7 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = {'comment': '사용자 정보를 관리하는 테이블'}
     
-    id = Column(Integer, primary_key=True, index=True, comment="사용자일련번호")  # 사용자 고유 식별자 (자동 증가)
+    id = Column(Integer, primary_key=True, autoincrement=True, index=True, comment="사용자일련번호")  # 사용자 고유 식별자 (자동 증가)
     user_id = Column(String(100), unique=True, nullable=False, index=True, comment="사용자아이디")  # 사용자 로그인 ID (중복 불가)
     user_uuid = Column(String(36), unique=True, nullable=False, index=True, default=lambda: str(uuid.uuid4()), comment="사용자고유식별자")  # 사용자 고유 UUID (시스템 내부 식별용)
     email = Column(String(255), nullable=False, comment="이메일주소")  # 사용자 이메일 주소
@@ -212,7 +212,7 @@ class SubscriptionPlan(Base):
     __table_args__ = {'comment': '서비스 구독 요금제 정보를 관리하는 테이블'}
     
     id = Column(Integer, primary_key=True, index=True, comment="구독요금일련번호")  # 구독요금 고유 식별자 (자동 증가)
-    plan_code = Column(String(50), unique=True, nullable=False, index=True, comment="요금제코드")  # 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
+    plan_code = Column(String(50), nullable=False, unique=True, index=True, comment="요금제코드")  # 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
     plan_description = Column(String(500), nullable=False, comment="요금제설명")  # 요금제 상세 설명
     monthly_price = Column(Integer, nullable=False, comment="월구독금액")  # 월 구독 금액 (원 단위)
     monthly_service_tokens = Column(Integer, nullable=False, comment="월제공서비스토큰수")  # 월 제공 서비스 토큰 수
@@ -266,7 +266,7 @@ class Payment(Base):
     
     payment_id = Column(String(50), primary_key=True, index=True, default=generate_payment_id, comment="결재번호")  # 결재번호 (yyyymmdd_nnn 형식)
     user_uuid = Column(String(36), nullable=False, index=True, comment="사용자고유식별자")  # 결재한 사용자의 UUID (User.user_uuid 참조)
-    plan_code = Column(String(50), unique=True, nullable=False, index=True, comment="요금제코드")  # 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
+    plan_code = Column(String(50), nullable=False, index=True, comment="요금제코드")  # 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
     supply_amount = Column(Integer, nullable=False, comment="공급가액")  # 공급가액 (원 단위, 부가세 제외)
     vat_amount = Column(Integer, nullable=False, comment="부가세")  # 부가세 (원 단위)
     total_amount = Column(Integer, nullable=False, comment="합계금액")  # 합계 금액 (공급가액 + 부가세)
@@ -409,11 +409,10 @@ class ServiceToken(Base):
     
     id = Column(Integer, primary_key=True, index=True, comment="서비스토큰일련번호")  # 서비스토큰 고유 식별자 (자동 증가)
     user_uuid = Column(String(36), ForeignKey('users.user_uuid'), nullable=False, index=True, comment="사용자고유식별자")  # 사용자 UUID (users.user_uuid 참조)
-    token_id = Column(String(100), nullable=False, index=True, comment="토큰식별자")  # 토큰 식별자
     quota_tokens = Column(NUMERIC(10,2), nullable=False, default=0.0, comment="구독할당토큰")  # 구독할당토큰 (분 단위)
     used_tokens = Column(NUMERIC(10,2), nullable=False, default=0.0, comment="누적사용토큰")  # 누적사용토큰 (분 단위)
     token_expiry_date = Column(Date, nullable=False, comment="토큰종료일자")  # 토큰종료일자
-    status = Column(String(20), nullable=False, default='정상', comment="상태")  # 상태 (정상, 만료, 일시중지)
+    status = Column(String(20), nullable=False, default='active', comment="상태")  # 상태 (active, expired, suspended)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="생성일시")  # 레코드 생성 시간
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="수정일시")  # 레코드 수정 시간
     
@@ -425,7 +424,7 @@ class ServiceToken(Base):
         Index('idx_service_token_user_uuid', 'user_uuid'),  # 사용자별 조회 최적화
         Index('idx_service_token_status', 'status'),  # 상태별 조회 최적화
         Index('idx_service_token_expiry', 'token_expiry_date'),  # 만료일별 조회 최적화
-        UniqueConstraint('user_uuid', 'token_id', name='uq_user_token'),  # 사용자별 토큰ID 중복 방지
+        # UniqueConstraint('user_uuid', 'token_id', name='uq_user_token'),  # 사용자별 토큰ID 중복 방지 - token_id 컬럼이 없으므로 주석 처리
         {'comment': '사용자별 토큰 할당 및 사용량을 관리하는 테이블'}
     )
 
@@ -451,4 +450,99 @@ class TokenUsageHistory(Base):
         Index('idx_token_usage_created_at', 'created_at'),  # 생성일자별 조회 최적화
         Index('idx_token_usage_request_id', 'request_id'),  # 요청ID별 조회 최적화
         {'comment': '토큰 사용 이력을 추적하는 테이블'}
+    )
+
+
+class SubscriptionMaster(Base):
+    """구독마스터 테이블 - 사용자별 현재 구독 상태 관리
+    
+    각 사용자의 현재 활성화된 구독 정보를 관리하는 마스터 테이블입니다.
+    사용자당 하나의 활성 구독만 존재하며, 구독 변경 시 이 테이블이 업데이트됩니다.
+    """
+    __tablename__ = "subscription_master"
+    
+    id = Column(Integer, primary_key=True, index=True, comment="구독마스터일련번호")  # 구독마스터 고유 식별자 (자동 증가)
+    user_uuid = Column(String(36), ForeignKey('users.user_uuid'), nullable=False, unique=True, index=True, comment="사용자고유식별자")  # 사용자 UUID (users.user_uuid 참조, 유니크)
+    subscription_id = Column(String(100), nullable=False, unique=True, index=True, comment="구독식별자")  # 구독 고유 식별자
+    
+    # 구독 정보
+    plan_code = Column(String(50), ForeignKey('subscription_plans.plan_code'), nullable=False, index=True, comment="요금제코드")  # 현재 요금제 코드 (subscription_plans.plan_code 참조)
+    unit_price = Column(Integer, nullable=False, comment="단가")  # 단가
+    quantity = Column(Integer, nullable=False, default=1, comment="인원수")  # 인원수
+    amount = Column(Integer, nullable=False, comment="금액")  # 금액
+    subscription_status = Column(String(20), nullable=False, default='active', comment="구독상태")  # 구독 상태 (active, suspended, cancelled, expired)
+
+    # 구독 기간
+    subscription_start_date = Column(Date, nullable=False, comment="구독시작일")  # 구독 시작일
+    subscription_end_date = Column(Date, nullable=True, comment="구독종료일")  # 구독 종료일 (무제한인 경우 NULL)
+    next_billing_date = Column(Date, nullable=True, comment="다음결제일")  # 다음 결제 예정일
+    
+    # 자동 갱신 설정
+    auto_renewal = Column(Boolean, nullable=False, default=True, comment="자동갱신여부")  # 자동 갱신 여부
+    renewal_plan_code = Column(String(50), nullable=True, comment="갱신요금제코드")  # 갱신 시 적용할 요금제 (NULL이면 현재 요금제로 갱신)
+    
+    # 메타데이터
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="생성일시")  # 레코드 생성 시간
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="수정일시")  # 레코드 수정 시간
+    
+    # 제약조건 및 인덱스
+    __table_args__ = (
+        CheckConstraint("subscription_status IN ('active', 'suspended', 'cancelled', 'expired')", name='check_subscription_status_valid'),  # 구독 상태 값 제한
+        CheckConstraint('subscription_start_date <= subscription_end_date OR subscription_end_date IS NULL', name='check_subscription_dates_valid'),  # 시작일 <= 종료일
+        Index('idx_subscription_master_user_uuid', 'user_uuid'),  # 사용자별 조회 최적화
+        Index('idx_subscription_master_plan_code', 'plan_code'),  # 요금제별 조회 최적화
+        Index('idx_subscription_master_status', 'subscription_status'),  # 상태별 조회 최적화
+        Index('idx_subscription_master_billing_date', 'next_billing_date'),  # 결제일별 조회 최적화
+        {'comment': '사용자별 현재 구독 상태를 관리하는 마스터 테이블'}
+    )
+
+
+class SubscriptionChangeHistory(Base):
+    """구독변경이력 테이블 - 구독 변경 이력 추적
+    
+    사용자의 구독 변경 이력을 시간순으로 기록하는 테이블입니다.
+    구독 생성, 요금제 변경, 일시정지, 해지 등 모든 구독 관련 변경사항을 추적합니다.
+    """
+    __tablename__ = "subscription_change_history"
+    
+    id = Column(Integer, primary_key=True, index=True, comment="구독변경이력일련번호")  # 변경이력 고유 식별자 (자동 증가)
+    user_uuid = Column(String(36), ForeignKey('users.user_uuid'), nullable=False, index=True, comment="사용자고유식별자")  # 사용자 UUID (users.user_uuid 참조)
+    subscription_id = Column(String(100), nullable=False, index=True, comment="구독식별자")  # 구독 식별자
+    change_id = Column(String(100), nullable=False, unique=True, index=True, comment="변경식별자")  # 변경 고유 식별자
+    
+    # 변경 정보
+    change_type = Column(String(30), nullable=False, comment="변경유형")  # 변경 유형 (create, upgrade, downgrade, suspend, resume, cancel, expire, renew)
+    change_reason = Column(String(100), nullable=True, comment="변경사유")  # 변경 사유
+    
+    # 변경 전후 정보
+    previous_plan_code = Column(String(50), nullable=True, comment="이전요금제코드")  # 변경 전 요금제 코드
+    new_plan_code = Column(String(50), nullable=True, comment="신규요금제코드")  # 변경 후 요금제 코드
+    previous_status = Column(String(20), nullable=True, comment="이전구독상태")  # 변경 전 구독 상태
+    new_status = Column(String(20), nullable=False, comment="신규구독상태")  # 변경 후 구독 상태
+    
+    # 변경 적용 일시
+    effective_date = Column(Date, nullable=False, comment="적용일자")  # 변경 적용 일자
+    change_requested_at = Column(DateTime(timezone=True), nullable=False, comment="변경요청일시")  # 변경 요청 일시
+    change_processed_at = Column(DateTime(timezone=True), server_default=func.now(), comment="변경처리일시")  # 변경 처리 일시
+    
+    # 변경 관련 추가 정보
+    proration_amount = Column(Integer, nullable=True, comment="일할계산금액")  # 일할 계산 금액 (원 단위)
+    refund_amount = Column(Integer, nullable=True, comment="환불금액")  # 환불 금액 (원 단위)
+    additional_charge = Column(Integer, nullable=True, comment="추가청구금액")  # 추가 청구 금액 (원 단위)
+    
+    # 처리자 정보
+    processed_by = Column(String(50), nullable=True, comment="처리자")  # 처리자 (system, admin, user)
+    admin_notes = Column(Text, nullable=True, comment="관리자메모")  # 관리자 메모
+    
+    # 메타데이터
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="생성일시")  # 레코드 생성 시간
+    
+    # 제약조건 및 인덱스
+    __table_args__ = (
+        Index('idx_subscription_change_user_uuid', 'user_uuid'),  # 사용자별 조회 최적화
+        Index('idx_subscription_change_subscription_id', 'subscription_id'),  # 구독별 조회 최적화
+        Index('idx_subscription_change_type', 'change_type'),  # 변경유형별 조회 최적화
+        Index('idx_subscription_change_effective_date', 'effective_date'),  # 적용일자별 조회 최적화
+        Index('idx_subscription_change_processed_at', 'change_processed_at'),  # 처리일시별 조회 최적화
+        {'comment': '구독 변경 이력을 시간순으로 추적하는 테이블'}
     )

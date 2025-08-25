@@ -14,7 +14,7 @@ import sys
 import json
 import logging
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
-from datetime import datetime, date
+from datetime import datetime
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from auth import (
@@ -26,7 +26,7 @@ from auth import (
     create_access_token,
     authenticate_user
 )
-from database import get_db, create_tables, test_connection, TranscriptionRequest, TranscriptionResponse, APIUsageLog, LoginLog, APIToken, SubscriptionPlan, Payment, SubscriptionPayment, TokenPayment, OveragePayment, ServiceToken, TokenUsageHistory, User, SubscriptionMaster, SubscriptionChangeHistory
+from database import get_db, create_tables, test_connection, TranscriptionRequest, TranscriptionResponse, APIUsageLog, LoginLog, APIToken, SubscriptionPlan, Payment, SubscriptionPayment, TokenPayment, OveragePayment, ServiceToken, TokenUsageHistory, User
 from db_service import TranscriptionService, APIUsageService
 from openai_service import OpenAIService
 from stt_manager import STTManager
@@ -297,32 +297,6 @@ class TokenUsageCreate(BaseModel):
     token_id: str
     used_tokens: float
     request_id: str
-
-class SubscriptionMasterCreate(BaseModel):
-    plan_code: str
-    subscription_start_date: str  # YYYY-MM-DD 형식
-    subscription_end_date: Optional[str] = None  # YYYY-MM-DD 형식
-    next_billing_date: Optional[str] = None  # YYYY-MM-DD 형식
-    auto_renewal: bool = True
-    renewal_plan_code: Optional[str] = None
-
-class SubscriptionMasterUpdate(BaseModel):
-    plan_code: Optional[str] = None
-    subscription_status: Optional[str] = None
-    subscription_end_date: Optional[str] = None
-    next_billing_date: Optional[str] = None
-    auto_renewal: Optional[bool] = None
-    renewal_plan_code: Optional[str] = None
-
-class SubscriptionChangeCreate(BaseModel):
-    change_type: str  # create, upgrade, downgrade, suspend, resume, cancel, expire, renew
-    change_reason: Optional[str] = None
-    new_plan_code: Optional[str] = None
-    effective_date: str  # YYYY-MM-DD 형식
-    proration_amount: Optional[int] = None
-    refund_amount: Optional[int] = None
-    additional_charge: Optional[int] = None
-    admin_notes: Optional[str] = None
 
 # 전역 예외 핸들러
 @app.exception_handler(RequestValidationError)
@@ -1797,8 +1771,9 @@ def create_payment(payment: PaymentCreate, current_user: str = Depends(verify_to
         # 서비스 토큰 레코드 생성
         service_token = ServiceToken(
             user_uuid=user_uuid,
+            token_id=token_id,
             quota_tokens=quota_tokens,
-            used_tokens=0.0,  # 초기값은 0으로 설정
+            used_tokens=0.0,
             token_expiry_date=token_expiry_date,
             status='active'
         )
@@ -1807,80 +1782,11 @@ def create_payment(payment: PaymentCreate, current_user: str = Depends(verify_to
         db.commit()
         db.refresh(service_token)
         
-        # 구독 마스터 생성 (신규 구독)
-        from datetime import datetime, timedelta
-        subscription_start_date = datetime.now().date()
-        subscription_end_date = subscription_start_date + timedelta(days=30)  # 1개월 후
-        next_billing_date = subscription_end_date
-        
-        logger.info(f"📋 구독 마스터 생성 시작 - 시작일: {subscription_start_date}, 종료일: {subscription_end_date}")
-        
-        # 기존 활성 구독이 있는지 확인
-        existing_subscription = db.query(SubscriptionMaster).filter(
-            SubscriptionMaster.user_uuid == user_uuid,
-            SubscriptionMaster.subscription_status == 'active'
-        ).first()
-        
-        if existing_subscription:
-            # 기존 구독을 취소 상태로 변경
-            existing_subscription.subscription_status = 'cancelled'
-            existing_subscription.subscription_end_date = subscription_start_date
-            logger.info(f"⚠️ 기존 활성 구독 취소 - 구독ID: {existing_subscription.subscription_id}")
-        
-        # 구독 ID 생성
-        import uuid
-        subscription_id = str(uuid.uuid4())
-        
-        # 새 구독 마스터 생성
-        new_subscription = SubscriptionMaster(
-            user_uuid=user_uuid,
-            subscription_id=subscription_id,
-            plan_code=payment.plan_code,
-            unit_price=unit_price,
-            quantity=payment.quantity,
-            amount=supply_amount,
-            subscription_status='active',
-            subscription_start_date=subscription_start_date,
-            subscription_end_date=subscription_end_date,
-            next_billing_date=next_billing_date,
-            auto_renewal=True,
-            renewal_plan_code=payment.plan_code
-        )
-        
-        db.add(new_subscription)
-        db.commit()
-        db.refresh(new_subscription)
-        
-        # 구독 변경 이력 생성 (신규 구독)
-        import uuid
-        subscription_change = SubscriptionChangeHistory(
-            user_uuid=user_uuid,
-            subscription_id=new_subscription.subscription_id,
-            change_id=f"CHG_{current_user}_{int(datetime.now().timestamp())}_{str(uuid.uuid4())[:8]}",
-            change_type='create',
-            change_reason='신규 구독 생성',
-            previous_plan_code=None,
-            new_plan_code=payment.plan_code,
-            previous_status=None,
-            new_status='active',
-            effective_date=subscription_start_date,
-            change_requested_at=datetime.now(),
-            proration_amount=0,
-            refund_amount=0,
-            additional_charge=total_amount,
-            processed_by='system',
-            admin_notes=f"결제ID: {new_payment.payment_id}를 통한 신규 구독 생성"
-        )
-        
-        db.add(subscription_change)
-        db.commit()
-        db.refresh(subscription_change)
-        
-        logger.info(f"✅ 구독 결제, 서비스 토큰, 구독 마스터 생성 완료 - 결제번호: {new_payment.payment_id}, 토큰ID: {token_id}, 구독ID: {new_subscription.subscription_id}")
+        logger.info(f"✅ 구독 결제 및 서비스 토큰 생성 완료 - 결제번호: {new_payment.payment_id}, 토큰ID: {token_id}")
         
         return {
             "status": "success",
-            "message": "구독 결제, 서비스 토큰 및 구독 마스터가 성공적으로 생성되었습니다.",
+            "message": "구독 결제 및 서비스 토큰이 성공적으로 생성되었습니다.",
             "data": {
                 "payment_id": new_payment.payment_id,
                 "user_uuid": new_payment.user_uuid,
@@ -1897,15 +1803,6 @@ def create_payment(payment: PaymentCreate, current_user: str = Depends(verify_to
                     "quota_tokens": quota_tokens,
                     "token_expiry_date": token_expiry_date.isoformat(),
                     "status": "active"
-                },
-                "subscription": {
-                    "subscription_id": new_subscription.subscription_id,
-                    "subscription_status": new_subscription.subscription_status,
-                    "subscription_start_date": new_subscription.subscription_start_date.isoformat(),
-                    "subscription_end_date": new_subscription.subscription_end_date.isoformat(),
-                    "next_billing_date": new_subscription.next_billing_date.isoformat(),
-                    "auto_renewal": new_subscription.auto_renewal,
-                    "renewal_plan_code": new_subscription.renewal_plan_code
                 },
                 "created_at": new_payment.created_at.isoformat()
             }
@@ -2373,7 +2270,7 @@ def create_service_token(service_token: ServiceTokenCreate, current_user: str = 
     - **expires_at**: 만료일시
     """
     try:
-        logger.info(f"🚀 서비스 토큰 생성 시작 - 사용자: {service_token.user_uuid}")
+        logger.info(f"🚀 서비스 토큰 생성 시작 - 사용자: {service_token.user_uuid}, 토큰ID: {service_token.token_id}")
         
         # 사용자 확인
         user = db.query(User).filter(User.user_uuid == service_token.user_uuid).first()
@@ -2387,6 +2284,7 @@ def create_service_token(service_token: ServiceTokenCreate, current_user: str = 
         # 새 서비스 토큰 생성
         new_service_token = ServiceToken(
             user_uuid=service_token.user_uuid,
+            token_id=service_token.token_id,
             quota_tokens=service_token.quota_tokens,
             used_tokens=0.0,  # 초기값
             token_expiry_date=service_token.token_expiry_date,
@@ -2405,6 +2303,7 @@ def create_service_token(service_token: ServiceTokenCreate, current_user: str = 
             "data": {
                 "id": new_service_token.id,
                 "user_uuid": new_service_token.user_uuid,
+                "token_id": new_service_token.token_id,
                 "quota_tokens": new_service_token.quota_tokens,
                 "used_tokens": new_service_token.used_tokens,
                 "remaining_tokens": new_service_token.quota_tokens - new_service_token.used_tokens,
@@ -2454,6 +2353,7 @@ def get_service_tokens(user_uuid: Optional[str] = None, token_type: Optional[str
             service_token_list.append({
                 "id": st.id,
                 "user_uuid": st.user_uuid,
+                "token_id": st.token_id,
                 "quota_tokens": st.quota_tokens,
                 "used_tokens": st.used_tokens,
                 "remaining_tokens": st.quota_tokens - st.used_tokens,
@@ -2725,670 +2625,10 @@ def get_token_usage_history(service_token_id: int, limit: int = 50, current_user
         )
 
 
-# ==================== 구독 관련 API ====================
-
-@app.post("/subscriptions/", summary="구독 생성")
-def create_subscription(subscription: SubscriptionMasterCreate, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
-    """
-    새로운 구독을 생성합니다.
-    
-    - **plan_code**: 구독할 요금제 코드
-    - **subscription_start_date**: 구독 시작일 (YYYY-MM-DD)
-    - **subscription_end_date**: 구독 종료일 (선택사항, YYYY-MM-DD)
-    - **next_billing_date**: 다음 결제일 (선택사항, YYYY-MM-DD)
-    - **auto_renewal**: 자동 갱신 여부 (기본값: true)
-    - **renewal_plan_code**: 갱신 시 적용할 요금제 (선택사항)
-    """
-    try:
-        logger.info(f"🚀 구독 생성 시작 - 사용자: {current_user}, 요금제: {subscription.plan_code}")
-        
-        # 사용자 정보 조회
-        user = db.query(User).filter(User.user_uuid == current_user).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
-        
-        # 요금제 존재 확인
-        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.plan_code == subscription.plan_code).first()
-        if not plan:
-            raise HTTPException(status_code=404, detail="요금제를 찾을 수 없습니다")
-        
-        # 기존 활성 구독 확인
-        existing_subscription = db.query(SubscriptionMaster).filter(
-            SubscriptionMaster.user_uuid == current_user,
-            SubscriptionMaster.subscription_status == 'active'
-        ).first()
-        
-        if existing_subscription:
-            raise HTTPException(status_code=400, detail="이미 활성화된 구독이 존재합니다")
-        
-        # 구독 ID 생성
-        subscription_id = f"SUB_{current_user}_{int(datetime.now().timestamp())}"
-        
-        # 구독 생성
-        from datetime import datetime, date
-        new_subscription = SubscriptionMaster(
-            user_uuid=current_user,
-            subscription_id=subscription_id,
-            plan_code=subscription.plan_code,
-            subscription_status='active',
-            subscription_start_date=datetime.strptime(subscription.subscription_start_date, "%Y-%m-%d").date(),
-            subscription_end_date=datetime.strptime(subscription.subscription_end_date, "%Y-%m-%d").date() if subscription.subscription_end_date else None,
-            next_billing_date=datetime.strptime(subscription.next_billing_date, "%Y-%m-%d").date() if subscription.next_billing_date else None,
-            auto_renewal=subscription.auto_renewal,
-            renewal_plan_code=subscription.renewal_plan_code
-        )
-        
-        db.add(new_subscription)
-        
-        # 구독 변경 이력 생성
-        change_id = f"CHG_{subscription_id}_{int(datetime.now().timestamp())}"
-        change_history = SubscriptionChangeHistory(
-            user_uuid=current_user,
-            subscription_id=subscription_id,
-            change_id=change_id,
-            change_type='create',
-            change_reason='새 구독 생성',
-            previous_plan_code=None,
-            new_plan_code=subscription.plan_code,
-            previous_status=None,
-            new_status='active',
-            effective_date=datetime.strptime(subscription.subscription_start_date, "%Y-%m-%d").date(),
-            change_requested_at=datetime.now(),
-            processed_by='user'
-        )
-        
-        db.add(change_history)
-        db.commit()
-        
-        logger.info(f"✅ 구독 생성 완료 - 구독ID: {subscription_id}")
-        
-        return {
-            "status": "success",
-            "message": "구독이 성공적으로 생성되었습니다",
-            "data": {
-                "subscription_id": subscription_id,
-                "user_uuid": current_user,
-                "plan_code": subscription.plan_code,
-                "subscription_status": "active",
-                "subscription_start_date": subscription.subscription_start_date,
-                "subscription_end_date": subscription.subscription_end_date,
-                "next_billing_date": subscription.next_billing_date,
-                "auto_renewal": subscription.auto_renewal,
-                "renewal_plan_code": subscription.renewal_plan_code,
-                "created_at": new_subscription.created_at.isoformat()
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"❌ 구독 생성 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"구독 생성 실패: {str(e)}")
-
-
-@app.get("/subscriptions/", summary="사용자 구독 조회")
-def get_user_subscription(current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
-    """
-    현재 사용자의 구독 정보를 조회합니다.
-    """
-    try:
-        logger.info(f"🔍 사용자 구독 조회 시작 - 사용자: {current_user}")
-        
-        # current_user는 user_id이므로 user_uuid를 조회해야 함
-        user_info = get_user(current_user, db=db)
-        if not user_info:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        user_uuid = user_info["user_uuid"]
-        logger.info(f"🔍 사용자 구독 조회 시작 - 사용자 user_uuid: {user_uuid}")        
-        
-        # 사용자의 현재 구독 조회
-        subscription = db.query(SubscriptionMaster).filter(
-            SubscriptionMaster.user_uuid == user_uuid
-        ).first()
-        
-        if not subscription:
-            return {
-                "status": "success",
-                "message": "구독 정보가 없습니다",
-                "data": None
-            }
-        
-        # 요금제 정보 조회
-        plan = db.query(SubscriptionPlan).filter(
-            SubscriptionPlan.plan_code == subscription.plan_code
-        ).first()
-        
-        subscription_data = {
-            "id": subscription.id,
-            "subscription_id": subscription.subscription_id,
-            "user_uuid": subscription.user_uuid,
-            "plan_code": subscription.plan_code,
-            "plan_description": plan.plan_description if plan else None,
-            "monthly_price": plan.monthly_price if plan else None,
-            "monthly_service_tokens": plan.monthly_service_tokens if plan else None,
-            "subscription_status": subscription.subscription_status,
-            "subscription_start_date": subscription.subscription_start_date.isoformat() if subscription.subscription_start_date else None,
-            "subscription_end_date": subscription.subscription_end_date.isoformat() if subscription.subscription_end_date else None,
-            "next_billing_date": subscription.next_billing_date.isoformat() if subscription.next_billing_date else None,
-            "auto_renewal": subscription.auto_renewal,
-            "renewal_plan_code": subscription.renewal_plan_code,
-            "created_at": subscription.created_at.isoformat(),
-            "updated_at": subscription.updated_at.isoformat()
-        }
-        
-        logger.info(f"✅ 사용자 구독 조회 완료 - 구독ID: {subscription.subscription_id}")
-        
-        return {
-            "status": "success",
-            "message": "구독 정보 조회 성공",
-            "data": subscription_data
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 사용자 구독 조회 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"구독 조회 실패: {str(e)}")
-
-
-@app.put("/subscriptions/{subscription_id}", summary="구독 정보 수정")
-def update_subscription(
-    subscription_id: str, 
-    subscription_update: SubscriptionMasterUpdate, 
-    current_user: str = Depends(verify_token), 
-    db: Session = Depends(get_db)):
-    """
-    구독 정보를 수정합니다.
-    
-    - **plan_code**: 변경할 요금제 코드
-    - **subscription_status**: 구독 상태 (active, suspended, cancelled, expired)
-    - **subscription_end_date**: 구독 종료일
-    - **next_billing_date**: 다음 결제일
-    - **auto_renewal**: 자동 갱신 여부
-    - **renewal_plan_code**: 갱신 시 적용할 요금제
-    """
-    try:
-        logger.info(f"🔄 구독 수정 시작 - 구독ID: {subscription_id}, 사용자: {current_user}")
-        
-        # current_user는 user_id이므로 user_uuid를 조회해야 함
-        user_info = get_user(current_user, db=db)
-        if not user_info:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        user_uuid = user_info["user_uuid"]
-        logger.info(f"🔍 사용자 구독 조회 시작 - 사용자 user_uuid: {user_uuid}")           
-        
-        # 구독 조회
-        subscription = db.query(SubscriptionMaster).filter(
-            SubscriptionMaster.subscription_id == subscription_id,
-            SubscriptionMaster.user_uuid == user_uuid
-        ).first()
-        
-        if not subscription:
-            raise HTTPException(status_code=404, detail="구독을 찾을 수 없습니다")
-        
-        # 변경 전 정보 저장
-        previous_plan_code = subscription.plan_code
-        previous_status = subscription.subscription_status
-        
-        # 구독 정보 업데이트
-        update_data = subscription_update.dict(exclude_unset=True)
-        
-        for field, value in update_data.items():
-            if field in ['subscription_end_date', 'next_billing_date'] and value:
-                value = datetime.strptime(value, "%Y-%m-%d").date()
-            setattr(subscription, field, value)
-        
-        # 변경 이력 생성 (요금제나 상태가 변경된 경우)
-        if subscription_update.plan_code or subscription_update.subscription_status:
-            change_id = f"CHG_{subscription_id}_{int(datetime.now().timestamp())}"
-            
-            # 변경 유형 결정
-            change_type = 'update'
-            if subscription_update.subscription_status == 'suspended':
-                change_type = 'suspend'
-            elif subscription_update.subscription_status == 'cancelled':
-                change_type = 'cancel'
-            elif subscription_update.subscription_status == 'active' and previous_status != 'active':
-                change_type = 'resume'
-            elif subscription_update.plan_code and subscription_update.plan_code != previous_plan_code:
-                # 정확한 업그레이드/다운그레이드 판단
-                change_type = _determine_change_type(previous_plan_code, subscription_update.plan_code, db)
-            
-            logger.info(f"🔍 사용자 구독 조회 시작 - 사용자 user_uuid2 {user_uuid}")           
-            change_history = SubscriptionChangeHistory(
-                user_uuid=user_uuid,
-                subscription_id=subscription_id,
-                change_id=change_id,
-                change_type=change_type,
-                change_reason='구독 정보 수정',
-                previous_plan_code=previous_plan_code,
-                new_plan_code=subscription.plan_code,
-                previous_status=previous_status,
-                new_status=subscription.subscription_status,
-                effective_date=datetime.now().date(),
-                change_requested_at=datetime.now(),
-                processed_by='user'
-            )
-            
-            db.add(change_history)
-        
-        db.commit()
-        
-        logger.info(f"✅ 구독 수정 완료 - 구독ID: {subscription_id}")
-        
-        return {
-            "status": "success",
-            "message": "구독 정보가 성공적으로 수정되었습니다",
-            "data": {
-                "subscription_id": subscription.subscription_id,
-                "plan_code": subscription.plan_code,
-                "subscription_status": subscription.subscription_status,
-                "subscription_end_date": subscription.subscription_end_date.isoformat() if subscription.subscription_end_date else None,
-                "next_billing_date": subscription.next_billing_date.isoformat() if subscription.next_billing_date else None,
-                "auto_renewal": subscription.auto_renewal,
-                "renewal_plan_code": subscription.renewal_plan_code,
-                "updated_at": subscription.updated_at.isoformat()
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"❌ 구독 수정 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"구독 수정 실패: {str(e)}")
-
-
-def _get_new_status_from_change_type(change_type: str, current_status: str) -> str:
-    """변경 유형에 따른 새로운 구독 상태 반환"""
-    if change_type == 'suspend':
-        return 'suspended'
-    elif change_type == 'resume':
-        return 'active'
-    elif change_type == 'cancel':
-        return 'cancelled'
-    elif change_type in ['upgrade', 'downgrade']:
-        return 'active'
-    else:
-        return current_status
-
-
-def _determine_change_type(current_plan_code: str, new_plan_code: str, db: Session) -> str:
-    """
-    현재 요금제와 새 요금제를 비교하여 변경 유형을 결정합니다.
-    
-    Args:
-        current_plan_code: 현재 요금제 코드
-        new_plan_code: 새 요금제 코드
-        db: 데이터베이스 세션
-    
-    Returns:
-        변경 유형 ('upgrade', 'downgrade', 'same')
-    """
-    if current_plan_code == new_plan_code:
-        return 'same'
-    
-    # 현재 요금제 정보 조회
-    current_plan = db.query(SubscriptionPlan).filter(
-        SubscriptionPlan.plan_code == current_plan_code
-    ).first()
-    
-    # 새 요금제 정보 조회
-    new_plan = db.query(SubscriptionPlan).filter(
-        SubscriptionPlan.plan_code == new_plan_code
-    ).first()
-    
-    if not current_plan or not new_plan:
-        return 'update'  # 요금제 정보를 찾을 수 없는 경우 기본값
-    
-    # 월 구독 금액을 기준으로 업그레이드/다운그레이드 판단
-    if new_plan.monthly_price > current_plan.monthly_price:
-        return 'upgrade'
-    elif new_plan.monthly_price < current_plan.monthly_price:
-        return 'downgrade'
-    else:
-        # 금액이 같은 경우 서비스 토큰 수로 판단
-        if new_plan.monthly_service_tokens > current_plan.monthly_service_tokens:
-            return 'upgrade'
-        elif new_plan.monthly_service_tokens < current_plan.monthly_service_tokens:
-            return 'downgrade'
-        else:
-            return 'same'
-
-
-def _calculate_proration(current_plan: SubscriptionPlan, new_plan: SubscriptionPlan, 
-                        billing_cycle_start: date, billing_cycle_end: date, 
-                        change_date: date) -> dict:
-    """
-    요금제 변경 시 일할 계산을 수행합니다.
-    
-    Args:
-        current_plan: 현재 요금제 정보
-        new_plan: 새 요금제 정보
-        billing_cycle_start: 현재 청구 주기 시작일
-        billing_cycle_end: 현재 청구 주기 종료일
-        change_date: 변경 적용일
-    
-    Returns:
-        일할 계산 결과 딕셔너리
-    """
-    from datetime import timedelta
-    
-    # 전체 청구 주기 일수
-    total_days = (billing_cycle_end - billing_cycle_start).days + 1
-    
-    # 변경일부터 청구 주기 종료일까지의 남은 일수
-    remaining_days = (billing_cycle_end - change_date).days + 1
-    
-    if remaining_days <= 0:
-        return {
-            "proration_amount": 0,
-            "refund_amount": 0,
-            "additional_charge": 0,
-            "calculation_details": "변경일이 청구 주기를 벗어남"
-        }
-    
-    # 현재 요금제의 일할 환불 금액
-    current_daily_rate = current_plan.monthly_price / total_days
-    refund_amount = int(current_daily_rate * remaining_days)
-    
-    # 새 요금제의 일할 청구 금액
-    new_daily_rate = new_plan.monthly_price / total_days
-    additional_charge = int(new_daily_rate * remaining_days)
-    
-    # 순 일할 계산 금액 (양수: 추가 청구, 음수: 환불)
-    proration_amount = additional_charge - refund_amount
-    
-    calculation_details = (
-        f"전체 청구 주기: {total_days}일, "
-        f"남은 일수: {remaining_days}일, "
-        f"현재 요금제 일할: {current_daily_rate:.2f}원/일, "
-        f"새 요금제 일할: {new_daily_rate:.2f}원/일"
-    )
-    
-    return {
-        "proration_amount": proration_amount,
-        "refund_amount": refund_amount if proration_amount < 0 else 0,
-        "additional_charge": additional_charge if proration_amount > 0 else 0,
-        "calculation_details": calculation_details
-    }
-
-
-def _validate_subscription_change(subscription: SubscriptionMaster, change_type: str, 
-                                 new_plan_code: str = None) -> bool:
-    """
-    구독 변경 요청의 유효성을 검증합니다.
-    
-    Args:
-        subscription: 현재 구독 정보
-        change_type: 변경 유형
-        new_plan_code: 새 요금제 코드 (선택사항)
-    
-    Returns:
-        유효성 검증 결과
-    
-    Raises:
-        HTTPException: 유효하지 않은 변경 요청인 경우
-    """
-    current_status = subscription.subscription_status
-    
-    # 상태별 허용되는 변경 유형 정의
-    allowed_changes = {
-        'active': ['upgrade', 'downgrade', 'suspend', 'cancel'],
-        'suspended': ['resume', 'cancel'],
-        'cancelled': [],  # 취소된 구독은 변경 불가
-        'expired': []     # 만료된 구독은 변경 불가
-    }
-    
-    if current_status not in allowed_changes:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"알 수 없는 구독 상태입니다: {current_status}"
-        )
-    
-    if change_type not in allowed_changes[current_status]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"현재 상태({current_status})에서는 {change_type} 변경이 허용되지 않습니다"
-        )
-    
-    # 요금제 변경 시 새 요금제 코드 필수
-    if change_type in ['upgrade', 'downgrade'] and not new_plan_code:
-        raise HTTPException(
-            status_code=400,
-            detail="요금제 변경 시 새 요금제 코드가 필요합니다"
-        )
-    
-    # 동일한 요금제로 변경 방지
-    if new_plan_code and new_plan_code == subscription.plan_code:
-        raise HTTPException(
-            status_code=400,
-            detail="현재와 동일한 요금제로는 변경할 수 없습니다"
-        )
-    
-    return True
-
-
-@app.post("/subscriptions/{subscription_id}/change", summary="구독 변경 요청")
-def create_subscription_change(subscription_id: str, change_request: SubscriptionChangeCreate, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
-    """
-    구독 변경을 요청합니다.
-    
-    - **change_type**: 변경 유형 (upgrade, downgrade, suspend, resume, cancel)
-    - **change_reason**: 변경 사유
-    - **new_plan_code**: 새로운 요금제 코드 (요금제 변경 시)
-    - **effective_date**: 변경 적용일 (YYYY-MM-DD)
-    - **proration_amount**: 일할 계산 금액
-    - **refund_amount**: 환불 금액
-    - **additional_charge**: 추가 청구 금액
-    - **admin_notes**: 관리자 메모
-    """
-    try:
-        logger.info(f"🔄 구독 변경 요청 시작 - 구독ID: {subscription_id}, 변경유형: {change_request.change_type}")
-        
-        # 구독 조회
-        subscription = db.query(SubscriptionMaster).filter(
-            SubscriptionMaster.subscription_id == subscription_id,
-            SubscriptionMaster.user_uuid == current_user
-        ).first()
-        
-        if not subscription:
-            raise HTTPException(status_code=404, detail="구독을 찾을 수 없습니다")
-        
-        # 변경 요청 검증
-        _validate_subscription_change(subscription, change_request.change_type, change_request.new_plan_code)
-        
-        # 새 요금제 존재 확인 (요금제 변경 시)
-        if change_request.new_plan_code:
-            new_plan = db.query(SubscriptionPlan).filter(
-                SubscriptionPlan.plan_code == change_request.new_plan_code
-            ).first()
-            if not new_plan:
-                raise HTTPException(status_code=404, detail="새 요금제를 찾을 수 없습니다")
-            
-            # 변경 유형이 요금제 변경인 경우 정확한 타입 결정
-            if change_request.change_type in ['upgrade', 'downgrade']:
-                actual_change_type = _determine_change_type(subscription.plan_code, change_request.new_plan_code, db)
-                if actual_change_type != change_request.change_type:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail=f"요청한 변경 유형({change_request.change_type})과 실제 변경 유형({actual_change_type})이 일치하지 않습니다"
-                    )
-        
-        # 변경 ID 생성
-        change_id = f"CHG_{subscription_id}_{int(datetime.now().timestamp())}"
-        
-        # 비례 계산 (요금제 변경 시)
-        proration_result = None
-        if change_request.change_type in ['upgrade', 'downgrade'] and change_request.new_plan_code:
-            current_plan = db.query(SubscriptionPlan).filter(
-                SubscriptionPlan.plan_code == subscription.plan_code
-            ).first()
-            new_plan = db.query(SubscriptionPlan).filter(
-                SubscriptionPlan.plan_code == change_request.new_plan_code
-            ).first()
-            
-            if current_plan and new_plan and subscription.billing_cycle_start_date and subscription.billing_cycle_end_date:
-                effective_date = datetime.strptime(change_request.effective_date, "%Y-%m-%d").date()
-                proration_result = _calculate_proration(
-                    current_plan, 
-                    new_plan, 
-                    subscription.billing_cycle_start_date,
-                    subscription.billing_cycle_end_date,
-                    effective_date
-                )
-        
-        # 변경 이력 생성
-        change_history = SubscriptionChangeHistory(
-            user_uuid=current_user,
-            subscription_id=subscription_id,
-            change_id=change_id,
-            change_type=change_request.change_type,
-            change_reason=change_request.change_reason,
-            previous_plan_code=subscription.plan_code,
-            new_plan_code=change_request.new_plan_code or subscription.plan_code,
-            previous_status=subscription.subscription_status,
-            new_status=_get_new_status_from_change_type(change_request.change_type, subscription.subscription_status),
-            effective_date=datetime.strptime(change_request.effective_date, "%Y-%m-%d").date(),
-            change_requested_at=datetime.now(),
-            proration_amount=proration_result['proration_amount'] if proration_result else change_request.proration_amount,
-            refund_amount=proration_result['refund_amount'] if proration_result else change_request.refund_amount,
-            additional_charge=proration_result['additional_charge'] if proration_result else change_request.additional_charge,
-            processed_by='user',
-            admin_notes=change_request.admin_notes
-        )
-        
-        db.add(change_history)
-        
-        # 즉시 적용되는 변경의 경우 구독 마스터 업데이트
-        effective_date = datetime.strptime(change_request.effective_date, "%Y-%m-%d").date()
-        if effective_date <= datetime.now().date():
-            if change_request.new_plan_code:
-                subscription.plan_code = change_request.new_plan_code
-            
-            new_status = _get_new_status_from_change_type(change_request.change_type, subscription.subscription_status)
-            subscription.subscription_status = new_status
-            
-            change_history.change_processed_at = datetime.now()
-        
-        db.commit()
-        
-        logger.info(f"✅ 구독 변경 요청 완료 - 변경ID: {change_id}")
-        
-        response_data = {
-            "status": "success",
-            "message": "구독 변경 요청이 성공적으로 처리되었습니다",
-            "data": {
-                "change_id": change_id,
-                "subscription_id": subscription_id,
-                "change_type": change_request.change_type,
-                "change_reason": change_request.change_reason,
-                "previous_plan_code": subscription.plan_code,
-                "new_plan_code": change_request.new_plan_code,
-                "effective_date": change_request.effective_date,
-                "proration_amount": change_history.proration_amount,
-                "refund_amount": change_history.refund_amount,
-                "additional_charge": change_history.additional_charge,
-                "created_at": change_history.created_at.isoformat()
-            }
-        }
-        
-        # 비례 계산 상세 정보 추가 (있는 경우)
-        if proration_result:
-            response_data["data"]["proration_details"] = {
-                "remaining_days": proration_result["remaining_days"],
-                "total_days": proration_result["total_days"],
-                "current_plan_daily_rate": proration_result["current_plan_daily_rate"],
-                "new_plan_daily_rate": proration_result["new_plan_daily_rate"],
-                "calculation_method": "일할 계산 기반"
-            }
-        
-        return response_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"❌ 구독 변경 요청 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"구독 변경 요청 실패: {str(e)}")
-
-
-@app.get("/subscriptions/{subscription_id}/history", summary="구독 변경 이력 조회")
-def get_subscription_history(subscription_id: str, limit: int = 50, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
-    """
-    구독의 변경 이력을 조회합니다.
-    
-    - **subscription_id**: 구독 식별자
-    - **limit**: 조회할 이력 수 (기본값: 50)
-    """
-    try:
-        logger.info(f"📋 구독 변경 이력 조회 시작 - 구독ID: {subscription_id}")
-        
-        # 구독 소유권 확인
-        subscription = db.query(SubscriptionMaster).filter(
-            SubscriptionMaster.subscription_id == subscription_id,
-            SubscriptionMaster.user_uuid == current_user
-        ).first()
-        
-        if not subscription:
-            raise HTTPException(status_code=404, detail="구독을 찾을 수 없습니다")
-        
-        # 변경 이력 조회
-        history = db.query(SubscriptionChangeHistory).filter(
-            SubscriptionChangeHistory.subscription_id == subscription_id
-        ).order_by(SubscriptionChangeHistory.created_at.desc()).limit(limit).all()
-        
-        history_list = []
-        for h in history:
-            history_list.append({
-                "id": h.id,
-                "change_id": h.change_id,
-                "subscription_id": h.subscription_id,
-                "change_type": h.change_type,
-                "change_reason": h.change_reason,
-                "previous_plan_code": h.previous_plan_code,
-                "new_plan_code": h.new_plan_code,
-                "previous_status": h.previous_status,
-                "new_status": h.new_status,
-                "effective_date": h.effective_date.isoformat() if h.effective_date else None,
-                "change_requested_at": h.change_requested_at.isoformat() if h.change_requested_at else None,
-                "change_processed_at": h.change_processed_at.isoformat() if h.change_processed_at else None,
-                "proration_amount": h.proration_amount,
-                "refund_amount": h.refund_amount,
-                "additional_charge": h.additional_charge,
-                "processed_by": h.processed_by,
-                "admin_notes": h.admin_notes,
-                "created_at": h.created_at.isoformat()
-            })
-        
-        logger.info(f"✅ 구독 변경 이력 조회 완료 - {len(history_list)}건")
-        
-        return {
-            "status": "success",
-            "message": "구독 변경 이력 조회 성공",
-            "data": {
-                "subscription_id": subscription_id,
-                "history": history_list,
-                "total_count": len(history_list)
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 구독 변경 이력 조회 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"구독 변경 이력 조회 실패: {str(e)}")
-
-
 if __name__ == "__main__":
     import logging
-    # 로깅 레벨을 DEBUG로 설정하여 더 자세한 로그 확인
+    
+    # 로깅 레벨 설정
     logging.basicConfig(level=logging.DEBUG)
-
+    
     uvicorn.run("app:app", host="0.0.0.0", port=8001, reload=False, log_level="debug")
