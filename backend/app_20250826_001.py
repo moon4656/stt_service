@@ -4,7 +4,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, 
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel, Field, Query
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from dotenv import load_dotenv
 from decimal import Decimal
@@ -306,24 +306,6 @@ class AdditionalTokenPurchaseResponse(BaseModel):
     status: str
     message: str
     data: dict
-
-# 월빌링 관련 Pydantic 모델들
-class MonthlyBillingRequest(BaseModel):
-    target_year: int = Field(..., ge=2020, le=2030, description="청구 연도")
-    target_month: int = Field(..., ge=1, le=12, description="청구 월")
-
-class MonthlyBillingResponse(BaseModel):
-    status: str
-    message: str
-    data: dict
-
-class MonthlySubscriptionBillingRequest(BaseModel):
-    target_year: int = Field(..., ge=2020, le=2030, description="결제 연도")
-    target_month: int = Field(..., ge=1, le=12, description="결제 월")
-
-class MonthlyBillingSummaryRequest(BaseModel):
-    target_year: int = Field(..., ge=2020, le=2030, description="조회 연도")
-    target_month: int = Field(..., ge=1, le=12, description="조회 월")
 
 class TokenUsageCreate(BaseModel):
     token_id: str
@@ -3611,8 +3593,8 @@ def purchase_additional_tokens(
         
         # 4. 토큰 비용 계산
         token_unit_price = int(per_minute_rate)  # 분당 요금을 토큰 단가로 사용
-        supply_amount = token_unit_price * request.token_quantity
-        total_amount = int(supply_amount * 1.1)  # 부가세 제외 공급가액
+        total_amount = token_unit_price * request.token_quantity
+        supply_amount = int(total_amount / 1.1)  # 부가세 제외 공급가액
         vat_amount = total_amount - supply_amount  # 부가세
         
         logger.info(f"💵 비용 계산 - 토큰단가: {token_unit_price}원, 총액: {total_amount}원 (공급가액: {supply_amount}원, 부가세: {vat_amount}원)")
@@ -3639,7 +3621,7 @@ def purchase_additional_tokens(
             payment_id=new_payment.payment_id,
             token_quantity=request.token_quantity,
             token_unit_price=token_unit_price,
-            amount=supply_amount
+            amount=total_amount
         )
         
         db.add(token_payment)
@@ -3707,225 +3689,6 @@ def purchase_additional_tokens(
         raise HTTPException(
             status_code=500,
             detail="추가 토큰 구매 중 오류가 발생했습니다."
-        )
-
-
-# ==================== 월빌링 API ====================
-
-@app.post("/monthly-billing/generate", summary="월빌링 생성")
-def generate_monthly_billing(
-    request: MonthlyBillingRequest,
-    current_user: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-) -> MonthlyBillingResponse:
-    """
-    지정된 년월의 모든 활성 구독자에 대한 월빌링을 생성합니다.
-    
-    - **target_year**: 청구 연도 (2020-2030)
-    - **target_month**: 청구 월 (1-12)
-    
-    처리 과정:
-    1. 활성 구독이 있는 모든 사용자 조회
-    2. 사용자별 월별 사용량 집계
-    3. 초과 사용량 계산 및 요금 산정
-    4. 월빌링 레코드 생성
-    5. 초과 사용량이 있는 경우 초과 결제 처리
-    """
-    try:
-        logger.info(f"🚀 월빌링 생성 API 호출 - 사용자: {current_user}, 대상: {request.target_year}년 {request.target_month}월")
-        
-        # 월빌링 서비스 초기화
-        from monthly_billing_service import MonthlyBillingService
-        billing_service = MonthlyBillingService(db)
-        
-        # 월빌링 생성
-        result = billing_service.generate_monthly_billing(
-            target_year=request.target_year,
-            target_month=request.target_month
-        )
-        
-        logger.info(f"✅ 월빌링 생성 API 완료 - 생성건수: {result.get('created_count', 0)}건")
-        
-        return MonthlyBillingResponse(
-            status="success",
-            message=result["message"],
-            data=result
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 월빌링 생성 API 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"월빌링 생성 중 오류가 발생했습니다: {str(e)}"
-        )
-
-@app.post("/monthly-billing/subscription-payments", summary="월구독결제 생성")
-def create_monthly_subscription_payments(
-    request: MonthlySubscriptionBillingRequest,
-    current_user: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-) -> MonthlyBillingResponse:
-    """
-    활성 구독자들의 월 구독료 결제를 생성하고 서비스 토큰을 초기화합니다.
-    
-    - **target_year**: 결제 연도 (2020-2030)
-    - **target_month**: 결제 월 (1-12)
-    
-    처리 과정:
-    1. 활성 구독 조회
-    2. 구독별 결제 정보 생성
-    3. 서비스 토큰 할당량 초기화
-    4. 결제 상태를 완료로 처리
-    """
-    try:
-        logger.info(f"🚀 월구독결제 생성 API 호출 - 사용자: {current_user}, 대상: {request.target_year}년 {request.target_month}월")
-        
-        # 월빌링 서비스 초기화
-        from monthly_billing_service import MonthlyBillingService
-        billing_service = MonthlyBillingService(db)
-        
-        # 월구독결제 생성
-        result = billing_service.create_monthly_subscription_billing(
-            target_year=request.target_year,
-            target_month=request.target_month
-        )
-        
-        logger.info(f"✅ 월구독결제 생성 API 완료 - 생성건수: {result.get('created_count', 0)}건")
-        
-        return MonthlyBillingResponse(
-            status="success",
-            message=result["message"],
-            data=result
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 월구독결제 생성 API 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"월구독결제 생성 중 오류가 발생했습니다: {str(e)}"
-        )
-
-@app.get("/monthly-billing/summary", summary="월빌링 요약 조회")
-def get_monthly_billing_summary(
-    target_year: int = Field(..., ge=2020, le=2030, description="조회 연도"),
-    target_month: int = Field(..., ge=1, le=12, description="조회 월"),
-    current_user: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-) -> MonthlyBillingResponse:
-    """
-    지정된 년월의 월빌링 요약 정보를 조회합니다.
-    
-    - **target_year**: 조회 연도 (2020-2030)
-    - **target_month**: 조회 월 (1-12)
-    
-    반환 정보:
-    - 총 빌링 건수
-    - 총 청구 금액
-    - 총 초과 사용료
-    - 평균 사용 시간
-    - 상태별 빌링 건수
-    """
-    try:
-        logger.info(f"🔍 월빌링 요약 조회 API 호출 - 사용자: {current_user}, 대상: {target_year}년 {target_month}월")
-        
-        # 월빌링 서비스 초기화
-        from monthly_billing_service import MonthlyBillingService
-        billing_service = MonthlyBillingService(db)
-        
-        # 월빌링 요약 조회
-        result = billing_service.get_monthly_billing_summary(
-            target_year=target_year,
-            target_month=target_month
-        )
-        
-        logger.info(f"✅ 월빌링 요약 조회 API 완료 - 총 {result.get('total_billings', 0)}건")
-        
-        return MonthlyBillingResponse(
-            status="success",
-            message="월빌링 요약 조회 성공",
-            data=result
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 월빌링 요약 조회 API 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"월빌링 요약 조회 중 오류가 발생했습니다: {str(e)}"
-        )
-
-@app.post("/monthly-billing/current-month/generate", summary="현재 월 빌링 생성")
-def generate_current_month_billing(
-    current_user: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-) -> MonthlyBillingResponse:
-    """
-    현재 월의 월빌링을 생성합니다.
-    
-    처리 과정:
-    1. 현재 년월 자동 계산
-    2. 활성 구독자 대상 월빌링 생성
-    3. 초과 사용량 처리
-    """
-    try:
-        logger.info(f"🚀 현재 월 빌링 생성 API 호출 - 사용자: {current_user}")
-        
-        # 현재 월 빌링 생성
-        from monthly_billing_service import create_monthly_billing_for_current_month
-        result = create_monthly_billing_for_current_month(db)
-        
-        logger.info(f"✅ 현재 월 빌링 생성 API 완료 - 생성건수: {result.get('created_count', 0)}건")
-        
-        return MonthlyBillingResponse(
-            status="success",
-            message=result["message"],
-            data=result
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 현재 월 빌링 생성 API 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"현재 월 빌링 생성 중 오류가 발생했습니다: {str(e)}"
-        )
-
-@app.post("/monthly-billing/current-month/subscription-payments", summary="현재 월 구독결제 생성")
-def create_current_month_subscription_payments(
-    current_user: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-) -> MonthlyBillingResponse:
-    """
-    현재 월의 구독결제를 생성하고 서비스 토큰을 초기화합니다.
-    
-    처리 과정:
-    1. 현재 년월 자동 계산
-    2. 활성 구독자 대상 구독결제 생성
-    3. 서비스 토큰 할당량 초기화
-    """
-    try:
-        logger.info(f"🚀 현재 월 구독결제 생성 API 호출 - 사용자: {current_user}")
-        
-        # 현재 월 구독결제 생성
-        from monthly_billing_service import create_subscription_payments_for_current_month
-        result = create_subscription_payments_for_current_month(db)
-        
-        logger.info(f"✅ 현재 월 구독결제 생성 API 완료 - 생성건수: {result.get('created_count', 0)}건")
-        
-        return MonthlyBillingResponse(
-            status="success",
-            message=result["message"],
-            data=result
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 현재 월 구독결제 생성 API 실패: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"현재 월 구독결제 생성 중 오류가 발생했습니다: {str(e)}"
         )
 
 
