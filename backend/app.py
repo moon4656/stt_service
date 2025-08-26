@@ -24,6 +24,7 @@ from auth import (
     get_user, 
     verify_token, 
     verify_api_key_dependency,
+    get_token_id_dependency,
     create_access_token,
     authenticate_user
 )
@@ -626,15 +627,14 @@ async def transcribe_audio(
 
                 # 오디오 길이 계산 (분 단위) - STT 시간 + 요약 시간
                 duration_seconds = transcription_result.get('audio_duration', 0)
-                # stt_processing_time = transcription_result.get('processing_time', 0)
-                # stt_processing_time = transcription_result.get('processing_time', 0)
                 total_processing_time = processing_time + summary_time
                 
                 # STT 시간 + 요약 시간을 분 단위로 계산
                 audio_duration_minutes = round(total_processing_time / 60, 2)
                 
                 # 토큰 사용량 계산 (1분당 1점)
-                tokens_used = round(audio_duration_minutes * 1.0, 2)
+                # tokens_used = round(audio_duration_minutes * 1.0, 2)
+                tokens_used = round(duration_seconds / 60, 2)
                 
                 # 서비스 제공업체 정보
                 service_provider = transcription_result.get('service_name', 'unknown')
@@ -1242,6 +1242,7 @@ async def transcribe_audio_protected(
     # summary_model: str = "informative",
     # summary_type: str = "bullets",
     current_user: str = Depends(verify_api_key_dependency),
+    token_id: str = Depends(get_token_id_dependency),
     db: Session = Depends(get_db)
 ):
  
@@ -1264,6 +1265,8 @@ async def transcribe_audio_protected(
     transcription_service = TranscriptionService(db)
     api_usage_service = APIUsageService(db)
     
+    logger.info(f' token_id --------------1 : {token_id}')
+    
     try:
         # 파일 확장자 검증
         allowed_extensions = [".mp3", ".wav", ".m4a", ".flac", ".aac"]
@@ -1277,6 +1280,19 @@ async def transcribe_audio_protected(
         
         # 파일 내용 읽기
         file_content = await file.read()
+        file_size = len(file_content)
+        
+        logger.info(f"📊 파일 크기: {file_size:,} bytes")      
+        
+        # 음성파일 재생 시간 계산
+        duration = get_audio_duration(file_content, file.filename)
+        if duration and duration > 0:
+            logger.info(f"🎵 음성파일 재생 시간: {format_duration(duration)}")
+            print(f"Audio duration: {format_duration(duration)}")
+        else:
+            logger.warning(f"⚠️ 음성파일 재생 시간을 계산할 수 없습니다")
+            print(f"Warning: Could not calculate audio duration")
+            duration = None  # 체크 제약 조건을 위해 None으로 설정          
         
         # 요청 정보 저장 (파일 경로 포함)
         request_record = transcription_service.create_request(
@@ -1343,12 +1359,22 @@ async def transcribe_audio_protected(
         processing_time = time.time() - start_time
         
         # STT 시간 + 요약 시간을 분 단위로 계산
-        stt_processing_time = result.get("processing_time", processing_time - summary_time)
-        total_processing_time = stt_processing_time + summary_time
+        # stt_processing_time = result.get("processing_time", processing_time - summary_time)
+        duration_seconds = result.get('audio_duration', 0)
+        total_processing_time = processing_time + summary_time
         audio_duration_minutes = round(total_processing_time / 60.0, 2)
         
+        logger.info(f' duration_seconds1 : {duration_seconds}')
+        logger.info(f' audio_duration_minutes : {audio_duration_minutes}')
+        
+        if duration_seconds == 0:
+            duration_seconds = duration
+
+        logger.info(f' duration_seconds 1: {duration_seconds}')
+        
         # 토큰 사용량 계산 (1분당 1점)
-        tokens_used = round(audio_duration_minutes * 1.0, 2)
+        tokens_used = round(duration_seconds / 60, 2)
+        # tokens_used = round(audio_duration_minutes * 1.0, 2)
         
         # STT 결과에서 confidence와 language_code 추출
         confidence_score = result.get('confidence')
@@ -1391,12 +1417,15 @@ async def transcribe_audio_protected(
             status="completed"
         )
         
+        logger.info(f' token_id --------------2 : {token_id}')
+        
         # 서비스 토큰 사용량 업데이트 (update lock 방지 처리 포함)
         try:
             from database import update_service_token_usage
             token_update_success = update_service_token_usage(
                 db=db,
                 user_uuid=current_user,
+                token_id=token_id,
                 tokens_used=tokens_used,
                 request_id=request_record.request_id
             )

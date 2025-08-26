@@ -316,6 +316,21 @@ def verify_api_key_dependency(credentials: HTTPAuthorizationCredentials = Depend
     
     return token_info["user_uuid"]
 
+def get_token_id_dependency(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    """API 키 검증 의존성 (데이터베이스 기반)"""
+    # Bearer 토큰에서 API 키 추출
+    api_key = credentials.credentials
+    
+    token_info = TokenManager.verify_api_key(api_key, db)
+    if not token_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return token_info["token_id"]
+
 # 사용자 관리 (데이터베이스 기반)
 def create_user(user_id: str, email: str, name: str, user_type: str, password: str, phone_number: Optional[str] = None, db: Session = None) -> Dict:
     """사용자 생성"""

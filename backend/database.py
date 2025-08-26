@@ -204,7 +204,7 @@ def test_connection():
         print(f"Database connection failed: {e}")
         return False
 
-def update_service_token_usage(db, user_uuid: str, tokens_used: float, request_id: str) -> bool:
+def update_service_token_usage(db, user_uuid: str, token_id: str, tokens_used: float, request_id: str) -> bool:
     """
     서비스 토큰 사용량을 업데이트하고 사용 이력을 기록합니다.
     update lock을 방지하기 위해 적절한 트랜잭션 처리를 수행합니다.
@@ -212,6 +212,7 @@ def update_service_token_usage(db, user_uuid: str, tokens_used: float, request_i
     Args:
         db: 데이터베이스 세션
         user_uuid: 사용자 UUID
+        token_id : 토큰 id
         tokens_used: 사용된 토큰 수량 (분 단위)
         request_id: 요청 고유 식별자
     
@@ -235,10 +236,65 @@ def update_service_token_usage(db, user_uuid: str, tokens_used: float, request_i
         try:
             # 트랜잭션 시작 시도
             logger.info("--------------------------------------1-0-2")
-            try:
-                logger.info("--------------------------------------1-0-2-1")  
-                with db.begin():
+            
+            # 이미 트랜잭션이 활성화되어 있는지 확인
+            if db.in_transaction():
+                logger.info("--------------------------------------1-0-2-0 - 이미 트랜잭션이 활성화됨")
+                # 이미 트랜잭션이 시작된 경우, 트랜잭션 없이 처리
+                logger.info("--------------------------------------1-1")
+                
+                # 활성 상태인 서비스 토큰 조회 (FOR UPDATE로 행 잠금)
+                service_token = db.query(ServiceToken).filter(
+                    ServiceToken.user_uuid == user_uuid,
+                    ServiceToken.status == 'active',
+                    ServiceToken.token_expiry_date >= func.current_date()
+                ).with_for_update().first()
 
+                logger.info("--------------------------------------1-2")
+                
+                if not service_token:
+                    logger.warning(f"⚠️ 활성 서비스 토큰을 찾을 수 없음 - 사용자: {user_uuid}")
+                    return False
+                
+                # 토큰 잔량 확인 (타입 변환 추가)
+                remaining_tokens = Decimal(str(service_token.quota_tokens)) - Decimal(str(service_token.used_tokens))
+                # logger.info(f"⚠️ remaining_tokens : {remaining_tokens}")
+                # if remaining_tokens < Decimal(str(tokens_used)):
+                #     logger.warning(f"⚠️ 토큰 잔량 부족 - 잔량: {remaining_tokens}, 요청: {tokens_used}")
+                #     return False
+                
+                # 토큰 사용량 업데이트 (타입 변환 추가)
+                logger.info("--------------------------------------1")
+                service_token.used_tokens += Decimal(str(tokens_used))
+                logger.info(f"service_token.used_tokens : {service_token.used_tokens}")
+                service_token.updated_at = func.now()
+                logger.info("--------------------------------------2")
+                
+                # 사용 이력 기록 (중복 방지를 위해 request_id 사용)
+                existing_usage = db.query(TokenUsageHistory).filter(
+                    TokenUsageHistory.request_id == request_id
+                ).first()
+                
+                logger.info(f" update_service_token_usage token_id : {token_id}")
+                if not existing_usage:
+                    usage_history = TokenUsageHistory(
+                        user_uuid=user_uuid,
+                        token_id=token_id,
+                        used_tokens=Decimal(str(tokens_used)),
+                        request_id=request_id
+                    )
+                    db.add(usage_history)
+                
+                logger.info("--------------------------------------4")
+                
+                # 변경사항 플러시 (커밋은 상위에서 처리)
+                db.flush()
+                
+                logger.info(f"✅ 서비스 토큰 사용량 업데이트 완료 - 사용자: {user_uuid}, 사용량: {tokens_used}, 잔량: {remaining_tokens - Decimal(str(tokens_used))}")
+                return True
+            else:
+                logger.info("--------------------------------------1-0-2-1 - 새 트랜잭션 시작")
+                with db.begin():
                     logger.info("--------------------------------------1-1")
                     
                     # 활성 상태인 서비스 토큰 조회 (FOR UPDATE로 행 잠금)
@@ -289,51 +345,7 @@ def update_service_token_usage(db, user_uuid: str, tokens_used: float, request_i
                     
                     logger.info(f"✅ 서비스 토큰 사용량 업데이트 완료 - 사용자: {user_uuid}, 사용량: {tokens_used}, 잔량: {remaining_tokens - Decimal(str(tokens_used))}")
                     return True
-                    
-            except Exception as e:
-                if "transaction is already begun" in str(e).lower():
-                    # 이미 트랜잭션이 시작된 경우, 트랜잭션 없이 처리
-                    # 활성 상태인 서비스 토큰 조회 (FOR UPDATE로 행 잠금)
-                    service_token = db.query(ServiceToken).filter(
-                        ServiceToken.user_uuid == user_uuid,
-                        ServiceToken.status == 'active',
-                        ServiceToken.token_expiry_date >= func.current_date()
-                    ).with_for_update().first()
-                    
-                    if not service_token:
-                        logger.warning(f"⚠️ 활성 서비스 토큰을 찾을 수 없음 - 사용자: {user_uuid}")
-                        return False
-                    
-                    # 토큰 잔량 확인 (타입 변환 추가)
-                    remaining_tokens = Decimal(str(service_token.quota_tokens)) - Decimal(str(service_token.used_tokens))
-                    if remaining_tokens < Decimal(str(tokens_used)):
-                        logger.warning(f"⚠️ 토큰 잔량 부족 - 잔량: {remaining_tokens}, 요청: {tokens_used}")
-                        return False
-                    
-                    # 토큰 사용량 업데이트 (타입 변환 추가)
-                    service_token.used_tokens += Decimal(str(tokens_used))
-                    service_token.updated_at = func.now()
-                    
-                    # 사용 이력 기록 (중복 방지를 위해 request_id 사용)
-                    existing_usage = db.query(TokenUsageHistory).filter(
-                        TokenUsageHistory.request_id == request_id
-                    ).first()
-                    
-                    if not existing_usage:
-                        usage_history = TokenUsageHistory(
-                            token_id=str(service_token.id),
-                            used_tokens=Decimal(str(tokens_used)),
-                            request_id=request_id
-                        )
-                        db.add(usage_history)
-                    
-                    # 변경사항 플러시 (커밋은 상위에서 처리)
-                    db.flush()
-                    
-                    logger.info(f"✅ 서비스 토큰 사용량 업데이트 완료 - 사용자: {user_uuid}, 사용량: {tokens_used}, 잔량: {remaining_tokens - tokens_used}")
-                    return True
-                else:
-                    raise e
+
                 
         except (IntegrityError, OperationalError, StaleDataError) as e:
             # 동시성 관련 오류 발생 시 재시도
@@ -598,6 +610,7 @@ class TokenUsageHistory(Base):
     __tablename__ = "token_usage_history"
     
     id = Column(Integer, primary_key=True, index=True, comment="토큰사용내역일련번호")  # 사용내역 고유 식별자 (자동 증가)
+    user_uuid = Column(String(36), ForeignKey('users.user_uuid'), nullable=False, index=True, comment="사용자고유식별자")  # 사용자 UUID (users.user_uuid 참조)
     token_id = Column(String(100), nullable=False, index=True, comment="토큰식별자")  # 토큰 식별자
     used_tokens = Column(NUMERIC(10,2), nullable=False, comment="사용토큰수량")  # 사용토큰 (분 단위, 소숫점 2자리)
     request_id = Column(String(100), nullable=False, unique=True, index=True, comment="요청고유식별자")  # 요청 고유 ID (중복 방지)
