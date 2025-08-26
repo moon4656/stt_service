@@ -1,10 +1,10 @@
 import os
 import requests
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from dotenv import load_dotenv
 from decimal import Decimal
@@ -26,7 +26,9 @@ from auth import (
     verify_api_key_dependency,
     get_token_id_dependency,
     create_access_token,
-    authenticate_user
+    authenticate_user,
+    hash_password,
+    verify_password
 )
 from database import get_db, create_tables, test_connection, TranscriptionRequest, TranscriptionResponse, APIUsageLog, LoginLog, APIToken, SubscriptionPlan, Payment, SubscriptionPayment, TokenPayment, OveragePayment, ServiceToken, TokenUsageHistory, User, SubscriptionMaster, SubscriptionChangeHistory
 from db_service import TranscriptionService, APIUsageService
@@ -295,6 +297,16 @@ class ServiceTokenUpdate(BaseModel):
     token_expiry_date: Optional[str] = None
     status: Optional[str] = None
 
+# 추가 토큰 구매 관련 Pydantic 모델
+class AdditionalTokenPurchaseRequest(BaseModel):
+    token_quantity: int = Field(..., gt=0, description="구매할 토큰 수량 (양수만 허용)")
+    payment_method: Optional[str] = Field(None, description="결제 수단")
+
+class AdditionalTokenPurchaseResponse(BaseModel):
+    status: str
+    message: str
+    data: dict
+
 class TokenUsageCreate(BaseModel):
     token_id: str
     used_tokens: float
@@ -325,6 +337,10 @@ class SubscriptionChangeCreate(BaseModel):
     refund_amount: Optional[int] = None
     additional_charge: Optional[int] = None
     admin_notes: Optional[str] = None
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 # 전역 예외 핸들러
 @app.exception_handler(RequestValidationError)
@@ -878,6 +894,76 @@ def login(login_request: LoginRequest, request: Request, db: Session = Depends(g
         db.commit()
         logger.error(f"로그인 시스템 오류 - 사용자: {login_request.user_id}, IP: {client_ip}, 오류: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.put("/auth/change-password", summary="패스워드 변경")
+def change_password(
+    password_request: PasswordChangeRequest, 
+    current_user: str = Depends(verify_token), 
+    db: Session = Depends(get_db)
+):
+    """
+    사용자의 패스워드를 변경합니다.
+    
+    - **current_password**: 현재 패스워드
+    - **new_password**: 새로운 패스워드
+    """
+    try:
+        logger.info(f"🔐 패스워드 변경 요청 - 사용자: {current_user}")
+        user_info = get_user(current_user, db=db)
+        
+        if not user_info:
+            logger.warning(f"⚠️ 사용자 정보를 찾을 수 없음: {current_user}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 사용자 정보 조회
+        user = db.query(User).filter(User.user_uuid == user_info["user_uuid"]).first()
+        if not user:
+            logger.warning(f"⚠️ 사용자를 찾을 수 없음: {current_user} / {user_info['user_uuid']}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 현재 패스워드 검증
+        if not verify_password(password_request.current_password, user.password_hash):
+            logger.warning(f"⚠️ 현재 패스워드 불일치 - 사용자: {current_user}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재 패스워드가 올바르지 않습니다."
+            )
+        
+        # 새 패스워드 해시화
+        new_password_hash = hash_password(password_request.new_password)
+        
+        # 패스워드 업데이트
+        user.password_hash = new_password_hash
+        user.updated_at = datetime.utcnow()
+        
+        db.commit()
+        
+        logger.info(f"✅ 패스워드 변경 완료 - 사용자: {current_user}")
+        
+        return {
+            "status": "success",
+            "message": "패스워드가 성공적으로 변경되었습니다.",
+            "user_uuid": current_user,
+            "updated_at": user.updated_at.isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 패스워드 변경 실패: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="패스워드 변경 중 오류가 발생했습니다."
+        )
+
 
 # 토큰 관리 API
 @app.post("/tokens/{token_id}", summary="API 키 발행")
@@ -2410,7 +2496,10 @@ def get_token_payments(payment_id: Optional[str] = None, limit: int = 50, curren
 
 # 서비스 토큰 관리 API 엔드포인트들
 @app.post("/service-tokens/", summary="서비스 토큰 생성")
-def create_service_token(service_token: ServiceTokenCreate, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
+def create_service_token(service_token: ServiceTokenCreate, 
+                         current_user: str = Depends(verify_token), 
+                         db: Session = Depends(get_db)):
+
     """
     새로운 서비스 토큰을 생성합니다.
     
@@ -2777,7 +2866,9 @@ def get_token_usage_history(service_token_id: int, limit: int = 50, current_user
 # ==================== 구독 관련 API ====================
 
 @app.post("/subscriptions/", summary="구독 생성")
-def create_subscription(subscription: SubscriptionMasterCreate, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
+def create_subscription(subscription: SubscriptionMasterCreate, 
+                        current_user: str = Depends(verify_token), 
+                        db: Session = Depends(get_db)):
     """
     새로운 구독을 생성합니다.
     
@@ -3433,6 +3524,172 @@ def get_subscription_history(subscription_id: str, limit: int = 50, current_user
         logger.error(f"❌ 구독 변경 이력 조회 실패: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"구독 변경 이력 조회 실패: {str(e)}")
+
+# ==================== 추가 토큰 구매 API ====================
+
+@app.post("/additional-tokens/purchase", summary="추가 토큰 구매")
+def purchase_additional_tokens(
+    request: AdditionalTokenPurchaseRequest,
+    current_user: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+) -> AdditionalTokenPurchaseResponse:
+    """
+    사용자의 활성 구독에 기반하여 추가 토큰을 구매합니다.
+    
+    - **token_quantity**: 구매할 토큰 수량 (양수만 허용)
+    - **payment_method**: 결제 수단 (선택사항)
+    
+    처리 과정:
+    1. 사용자의 활성 구독 상태 확인
+    2. 구독 요금제의 per_minute_rate 조회
+    3. 토큰 비용 계산 (per_minute_rate × 토큰 수량)
+    4. 결제 정보 생성 (payments 테이블)
+    5. 토큰 구매 상세 정보 생성 (token_payments 테이블)
+    6. 서비스 토큰 할당량 업데이트 (service_tokens 테이블)
+    """
+    try:
+        logger.info(f"🛒 추가 토큰 구매 시작 - 사용자: {current_user}, 토큰 수량: {request.token_quantity}")
+        
+        # 1. 사용자 정보 조회
+        user_info = get_user(current_user)
+        if not user_info:
+            logger.warning(f"⚠️ 사용자를 찾을 수 없음 - user_uuid: {current_user}")
+            raise HTTPException(
+                status_code=404,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        user_uuid = user_info["user_uuid"]
+        
+        # 2. 활성 구독 상태 확인
+        active_subscription = db.query(SubscriptionMaster).filter(
+            SubscriptionMaster.user_uuid == user_uuid,
+            SubscriptionMaster.subscription_status == "active"
+        ).first()
+        
+        if not active_subscription:
+            logger.warning(f"⚠️ 활성 구독을 찾을 수 없음 - user_uuid: {user_uuid}")
+            raise HTTPException(
+                status_code=400,
+                detail="활성 구독이 없습니다. 먼저 구독을 활성화해주세요."
+            )
+        
+        logger.info(f"📋 활성 구독 확인 - 구독ID: {active_subscription.subscription_id}, 요금제: {active_subscription.plan_code}")
+        
+        # 3. 구독 요금제의 per_minute_rate 조회
+        subscription_plan = db.query(SubscriptionPlan).filter(
+            SubscriptionPlan.plan_code == active_subscription.plan_code
+        ).first()
+        
+        if not subscription_plan:
+            logger.error(f"❌ 구독 요금제를 찾을 수 없음 - plan_code: {active_subscription.plan_code}")
+            raise HTTPException(
+                status_code=500,
+                detail="구독 요금제 정보를 찾을 수 없습니다."
+            )
+        
+        per_minute_rate = subscription_plan.per_minute_rate
+        logger.info(f"💰 요금제 정보 - 분당 요금: {per_minute_rate}원")
+        
+        # 4. 토큰 비용 계산
+        token_unit_price = int(per_minute_rate)  # 분당 요금을 토큰 단가로 사용
+        total_amount = token_unit_price * request.token_quantity
+        supply_amount = int(total_amount / 1.1)  # 부가세 제외 공급가액
+        vat_amount = total_amount - supply_amount  # 부가세
+        
+        logger.info(f"💵 비용 계산 - 토큰단가: {token_unit_price}원, 총액: {total_amount}원 (공급가액: {supply_amount}원, 부가세: {vat_amount}원)")
+        
+        # 5. 결제 정보 생성
+        new_payment = Payment(
+            user_uuid=user_uuid,
+            plan_code=active_subscription.plan_code,
+            supply_amount=supply_amount,
+            vat_amount=vat_amount,
+            total_amount=total_amount,
+            payment_status="pending",
+            payment_method=request.payment_method,
+            payment_type="token_purchase"
+        )
+        
+        db.add(new_payment)
+        db.flush()  # payment_id 생성을 위해 flush
+        
+        logger.info(f"💳 결제 정보 생성 - 결제번호: {new_payment.payment_id}")
+        
+        # 6. 토큰 구매 상세 정보 생성
+        token_payment = TokenPayment(
+            payment_id=new_payment.payment_id,
+            token_quantity=request.token_quantity,
+            token_unit_price=token_unit_price,
+            amount=total_amount
+        )
+        
+        db.add(token_payment)
+        
+        # 7. 서비스 토큰 할당량 업데이트
+        service_token = db.query(ServiceToken).filter(
+            ServiceToken.user_uuid == user_uuid,
+            ServiceToken.status == "active"
+        ).first()
+        
+        if service_token:
+            # 기존 할당 토큰에 추가
+            old_quota = service_token.quota_tokens
+            service_token.quota_tokens += Decimal(str(request.token_quantity))
+            logger.info(f"🔄 토큰 할당량 업데이트 - 기존: {old_quota} → 신규: {service_token.quota_tokens}")
+        else:
+            # 새로운 서비스 토큰 생성
+            from datetime import datetime, timedelta
+            import uuid
+            
+            expiry_date = datetime.now() + timedelta(days=365)  # 1년 후 만료
+            new_service_token = ServiceToken(
+                user_uuid=user_uuid,
+                token_id=str(uuid.uuid4()),
+                quota_tokens=Decimal(str(request.token_quantity)),
+                used_tokens=Decimal('0'),
+                token_expiry_date=expiry_date.date(),
+                status="active"
+            )
+            db.add(new_service_token)
+            logger.info(f"🆕 새 서비스 토큰 생성 - 할당량: {request.token_quantity}")
+        
+        # 8. 결제 상태를 완료로 변경 (실제 결제 연동 시에는 제거)
+        new_payment.payment_status = "completed"
+        new_payment.completed_at = datetime.now()
+        
+        db.commit()
+        
+        logger.info(f"✅ 추가 토큰 구매 완료 - 결제번호: {new_payment.payment_id}, 토큰수량: {request.token_quantity}")
+        
+        return AdditionalTokenPurchaseResponse(
+            status="success",
+            message="추가 토큰 구매가 성공적으로 완료되었습니다.",
+            data={
+                "payment_id": new_payment.payment_id,
+                "token_quantity": request.token_quantity,
+                "token_unit_price": token_unit_price,
+                "total_amount": total_amount,
+                "supply_amount": supply_amount,
+                "vat_amount": vat_amount,
+                "plan_code": active_subscription.plan_code,
+                "per_minute_rate": per_minute_rate,
+                "payment_status": new_payment.payment_status,
+                "created_at": new_payment.created_at.isoformat()
+            }
+        )
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ 추가 토큰 구매 실패: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail="추가 토큰 구매 중 오류가 발생했습니다."
+        )
 
 
 if __name__ == "__main__":
