@@ -3639,7 +3639,7 @@ def purchase_additional_tokens(
             logger.info(f"🔄 토큰 할당량 업데이트 - 기존: {old_quota} → 신규: {service_token.quota_tokens}")
         else:
             # 새로운 서비스 토큰 생성
-            from datetime import datetime, timedelta
+            from datetime import timedelta
             import uuid
             
             expiry_date = datetime.now() + timedelta(days=365)  # 1년 후 만료
