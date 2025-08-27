@@ -1,4 +1,3 @@
-import calendar
 import os
 import requests
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, status, Query
@@ -37,9 +36,6 @@ from openai_service import OpenAIService
 from stt_manager import STTManager
 from audio_utils import get_audio_duration, format_duration
 from file_storage import save_uploaded_file, get_stored_file_path, file_storage_manager
-# Get last day of month
-from calendar import monthrange
-from datetime import datetime, timedelta
 
 # 환경 변수 로드
 load_dotenv()
@@ -820,34 +816,6 @@ def read_root():
 def test_endpoint():
     print("Test endpoint called")
     return {"status": "ok", "message": "Test endpoint working"}
-
-@app.get("/test2")
-def test_endpoint():
-    print("Test endpoint called")
-
-    current_date = datetime.now()
-    last_day = get_last_day_of_month(current_date.year, current_date.month)      
-    
-    # Get today's date
-    today1 = datetime.now().date()
-    logger.info(f'today1 -------------- {today1}')
-
-    # Get today's date
-    today2 = datetime.today().date()          
-    logger.info(f'today2 -------------- {today2}')
-
-    now = datetime.now()
-    # formatted_date = now.strftime("%Y-%m-%d %H:%M:%S")
-    formatted_date = now.strftime("%d")
-    print("포맷된 날짜와 일자:", formatted_date)    
-
-    today = date.today()
-    first_day, last_day = calendar.monthrange(current_date.year, current_date.month)
-    subscription_day = last_day - today.day + 1
-    
-    current_date = datetime.now()    
-    
-    return {"status": "ok", "message": today.month, "message2" : current_date.day}
 
 # 사용자 관리 API
 @app.post("/users/", summary="사용자 생성")
@@ -1900,19 +1868,12 @@ def delete_subscription_plan(plan_code: str, db: Session = Depends(get_db)):
 
 # 결제 관련 API 엔드포인트들
 @app.post("/payments/", summary="구독 결제 생성")
-def create_payment(
-    payment: PaymentCreate, 
-    subscription_type: str = Query(..., description="Subscription type (NEW, SUBSCRIPTION)"),
-    current_user: str = Depends(verify_token), 
-    db: Session = Depends(get_db)
-):
+def create_payment(payment: PaymentCreate, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
     """
     요금제 코드와 인원수를 입력하여 구독 결제를 생성합니다.
     
-    - /payments/
     - **plan_code**: 요금제 코드 (예: BASIC, PREMIUM, ENTERPRISE)
     - **quantity**: 인원수 (기본값: 1)
-    - **subscription_type**: 구독 형태 (예: NEW, SUBSCRIPTION)
     - **payment_method**: 결제 수단 (선택사항)
     - **payment_type**: 결제 구분 (기본값: subscription)
     - **external_payment_id**: 외부 결제 시스템 ID (선택사항)
@@ -1936,53 +1897,13 @@ def create_payment(
             logger.warning(f"⚠️ 요금제를 찾을 수 없음 - 코드: {payment.plan_code}")
             raise HTTPException(status_code=404, detail=f"요금제 코드 '{payment.plan_code}'를 찾을 수 없거나 비활성화되었습니다.")
         
-        # Check if subscription master already exists
-        # existing_subscription_master = db.query(SubscriptionMaster).filter(
-        #    SubscriptionMaster.user_uuid == user_uuid,
-        #    SubscriptionMaster.subscription_status == 'active'
-        # ).first()
-
-        current_date = datetime.now()
+        # 금액 계산
         unit_price = subscription_plan.monthly_price  # 단가 (월 구독 금액)
         supply_amount = unit_price * payment.quantity  # 공급가액 = 단가 × 인원수
-        quota_tokens = subscription_plan.monthly_service_tokens * payment.quantity
-        last_day = calendar.monthrange(current_date.year, current_date.month)[1]
-
-        # 구독 일자
-        subscription_start_date = datetime.now().date()
-        subscription_end_date = datetime(current_date.year, current_date.month, last_day, 23, 59, 59)
-
-        # 다음 청구일
-        next_billing_date = subscription_end_date + timedelta(days=1)
-        next_billing_date = datetime(next_billing_date.year, next_billing_date.month, next_billing_date.day, 0, 0, 0)
-        quantity = payment.quantity
-        
-        logger.info(f"구독 계산1 - ubscription_plan.monthly_service_tokens : {subscription_plan.monthly_service_tokens} ")
-        
-
-        # 구독
-        if "NEW" == subscription_type:
-            # 신규 구독 기간 계산
-            subscription_day = last_day - current_date.day + 1
-            subscription_amount_day = supply_amount / subscription_day
-            supply_amount_month = subscription_day * subscription_amount_day
-            supply_amount = int(supply_amount_month)
-            quantity = int(supply_amount / unit_price)
-            quota_tokens_day = quota_tokens / last_day
-            quota_tokens = int(quota_tokens_day * subscription_day)            # 금액 계산
-            logger.info(f"구독 계산1 - quota_tokens : {quota_tokens}, supply_amount: {supply_amount}, quantity: {quantity}, last_day: {last_day}, subscription_day: {subscription_day}, quota_tokens_day : {quota_tokens_day} ")
-        
-        else :
-            vat_amount = int(supply_amount * 0.1)  # 부가세 10%
-            total_amount = supply_amount + vat_amount  # 총 금액
-            subscription_start_date = datetime(subscription_start_date.year, subscription_start_date.month, subscription_start_date.day, 0, 0, 0)
-            
-        logger.info(f"구독 계산2 - quota_tokens_day: {quota_tokens_day}, quota_tokens: {quota_tokens}, subscription_day: {subscription_day} ")
-
         vat_amount = int(supply_amount * 0.1)  # 부가세 10%
-        total_amount = supply_amount + vat_amount  # 총 금액 
+        total_amount = supply_amount + vat_amount  # 총 금액
         
-        logger.info(f"💰 금액 계산 완료 - 단가: {unit_price:,}원, 인원수: {quantity}, 공급가액: {supply_amount:,}원, 부가세: {vat_amount:,}원, 총액: {total_amount:,}원")
+        logger.info(f"💰 금액 계산 완료 - 단가: {unit_price:,}원, 인원수: {payment.quantity}, 공급가액: {supply_amount:,}원, 부가세: {vat_amount:,}원, 총액: {total_amount:,}원")
         
         # 새 결제 생성
         new_payment = Payment(
@@ -2005,7 +1926,7 @@ def create_payment(
             payment_id=new_payment.payment_id,
             plan_code=payment.plan_code,
             unit_price=unit_price,
-            quantity=quantity,
+            quantity=payment.quantity,
             amount=supply_amount
         )
         
@@ -2013,25 +1934,24 @@ def create_payment(
         db.commit()
         db.refresh(subscription_payment)
         
-
         # 서비스 토큰 생성 (구독할당토큰 = 월제공서비스토큰수 × 인원수)
-        # quota_tokens = subscription_plan.monthly_service_tokens * payment.quantity
+        quota_tokens = subscription_plan.monthly_service_tokens * payment.quantity
         
         # 토큰 만료일 설정 (결제일로부터 1개월 후)
-        # from datetime import datetime, timedelta
-        # token_expiry_date = (datetime.now() + timedelta(days=30)).date()
+        from datetime import datetime, timedelta
+        token_expiry_date = (datetime.now() + timedelta(days=30)).date()
         
         # 토큰 ID 생성 (payment_id 기반)
         token_id = f"TOKEN_{new_payment.payment_id}"
         
-        logger.info(f"🎫 서비스 토큰 생성 시작 - 할당토큰: {quota_tokens}, 만료일: {subscription_end_date}")
+        logger.info(f"🎫 서비스 토큰 생성 시작 - 할당토큰: {quota_tokens}, 만료일: {token_expiry_date}")
         
         # 서비스 토큰 레코드 생성
         service_token = ServiceToken(
             user_uuid=user_uuid,
             quota_tokens=quota_tokens,
             used_tokens=0.0,  # 초기값은 0으로 설정
-            token_expiry_date=subscription_end_date,
+            token_expiry_date=token_expiry_date,
             status='active'
         )
         
@@ -2040,7 +1960,10 @@ def create_payment(
         db.refresh(service_token)
         
         # 구독 마스터 생성 (신규 구독)
-        # subscription_end_date = subscription_start_date + timedelta(days=30)  # 1개월 후
+        from datetime import datetime, timedelta
+        subscription_start_date = datetime.now().date()
+        subscription_end_date = subscription_start_date + timedelta(days=30)  # 1개월 후
+        next_billing_date = subscription_end_date
         
         logger.info(f"📋 구독 마스터 생성 시작 - 시작일: {subscription_start_date}, 종료일: {subscription_end_date}")
         
@@ -2124,7 +2047,7 @@ def create_payment(
                 "service_token": {
                     "token_id": token_id,
                     "quota_tokens": quota_tokens,
-                    "token_expiry_date": subscription_end_date.isoformat(),
+                    "token_expiry_date": token_expiry_date.isoformat(),
                     "status": "active"
                 },
                 "subscription": {
@@ -4003,32 +3926,6 @@ def create_current_month_subscription_payments(
             status_code=500,
             detail=f"현재 월 구독결제 생성 중 오류가 발생했습니다: {str(e)}"
         )
-
-def get_last_day_of_month(year: int, month: int) -> int:
-    """
-    Get the last day of specified month
-    Args:
-        year: Year (e.g. 2024)
-        month: Month (1-12)
-    Returns:
-        Last day of month (28-31)
-    """
-    return monthrange(year, month)[1]
-
-# Example usage:
-# current_date = datetime.now()
-# last_day = get_last_day_of_month(current_date.year, current_date.month)
-
-def get_last_day_of_month(year: int, month: int) -> int:
-    """
-    Get the last day of specified month
-    Args:
-        year: Year (e.g. 2024)
-        month: Month (1-12)
-    Returns:
-        Last day of month (28-31)
-    """
-    return monthrange(year, month)[1]
 
 
 if __name__ == "__main__":

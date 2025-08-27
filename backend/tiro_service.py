@@ -15,7 +15,7 @@ class TiroService(STTServiceInterface):
     
     def __init__(self):
         self.api_key = os.getenv("TIRO_API_KEY")
-        self.base_url = "https://api.tiro.ooo"
+        self.base_url = "https://api.tiro-ooo.dev"
         self.supported_formats = ["mp3", "wav", "m4a", "flac", "ogg"]
         self.max_file_size = 100 * 1024 * 1024  # 100MB
     
