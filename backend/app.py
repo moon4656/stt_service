@@ -1964,8 +1964,12 @@ def create_payment(
         if "NEW" == subscription_type:
             # 신규 구독 기간 계산
             subscription_day = last_day - current_date.day + 1
-            subscription_amount_day = supply_amount / subscription_day
+            logger.info(f"구독 계산0 - subscription_day : {subscription_day}, last_day: {last_day}")
+            subscription_amount_day = supply_amount / last_day
+            logger.info(f"구독 계산0-1 - subscription_amount_day : {subscription_amount_day}, last_day: {last_day}")
             supply_amount_month = subscription_day * subscription_amount_day
+            logger.info(f"구독 계산0-1 - supply_amount_month : {supply_amount_month}")
+
             supply_amount = int(supply_amount_month)
             quantity = int(supply_amount / unit_price)
             quota_tokens_day = quota_tokens / last_day
@@ -1977,7 +1981,7 @@ def create_payment(
             total_amount = supply_amount + vat_amount  # 총 금액
             subscription_start_date = datetime(subscription_start_date.year, subscription_start_date.month, subscription_start_date.day, 0, 0, 0)
             
-        logger.info(f"구독 계산2 - quota_tokens_day: {quota_tokens_day}, quota_tokens: {quota_tokens}, subscription_day: {subscription_day} ")
+        logger.info(f"구독 계산2 - quota_tokens: {quota_tokens} ")
 
         vat_amount = int(supply_amount * 0.1)  # 부가세 10%
         total_amount = supply_amount + vat_amount  # 총 금액 
@@ -2026,6 +2030,8 @@ def create_payment(
         
         logger.info(f"🎫 서비스 토큰 생성 시작 - 할당토큰: {quota_tokens}, 만료일: {subscription_end_date}")
         
+        # service_tokens update 로 수정
+        
         # 서비스 토큰 레코드 생성
         service_token = ServiceToken(
             user_uuid=user_uuid,
@@ -2044,6 +2050,7 @@ def create_payment(
         
         logger.info(f"📋 구독 마스터 생성 시작 - 시작일: {subscription_start_date}, 종료일: {subscription_end_date}")
         
+        # SubscriptionMaster 수정
         # 기존 활성 구독이 있는지 확인
         existing_subscription = db.query(SubscriptionMaster).filter(
             SubscriptionMaster.user_uuid == user_uuid,
@@ -2059,6 +2066,8 @@ def create_payment(
         # 구독 ID 생성
         import uuid
         subscription_id = str(uuid.uuid4())
+
+        supply_amount = unit_price * payment.quantity  # 공급가액 = 단가 × 인원수
         
         # 새 구독 마스터 생성
         new_subscription = SubscriptionMaster(
@@ -2079,6 +2088,8 @@ def create_payment(
         db.add(new_subscription)
         db.commit()
         db.refresh(new_subscription)
+        
+        
         
         # 구독 변경 이력 생성 (신규 구독)
         import uuid
