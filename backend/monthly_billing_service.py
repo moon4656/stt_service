@@ -176,6 +176,7 @@ class MonthlyBillingService:
     def _calculate_monthly_usage(self, user_uuid: str, start_date: date, end_date: date) -> Dict[str, float]:
         """월별 사용량 집계
         
+        
         Args:
             user_uuid: 사용자 UUID
             start_date: 집계 시작일
@@ -251,6 +252,9 @@ class MonthlyBillingService:
             logger.error(f"❌ 초과 결제 처리 실패: {str(e)}")
             raise
     
+    # 월구독결제 생성
+    # 월 구독료 결제를 생성합니다.
+    # 서비스 토큰 초기화
     def create_monthly_subscription_billing(self, target_year: int, target_month: int) -> Dict[str, any]:
         """월구독결제 생성 - 활성 구독자들의 월 구독료 결제를 생성합니다.
         
@@ -302,6 +306,7 @@ class MonthlyBillingService:
             logger.error(f"❌ 월구독결제 생성 실패: {str(e)}")
             raise
     
+    # 구독 결제 생성
     def _create_subscription_payment(self, subscription: SubscriptionMaster, 
                                    target_year: int, target_month: int) -> Optional[Dict[str, any]]:
         """구독 결제 생성

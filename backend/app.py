@@ -2031,19 +2031,61 @@ def create_payment(
         logger.info(f"🎫 서비스 토큰 생성 시작 - 할당토큰: {quota_tokens}, 만료일: {subscription_end_date}")
         
         # service_tokens update 로 수정
+
+        # Check if service token already exists and delete if found
+        existing_token = db.query(ServiceToken).filter(
+            ServiceToken.user_uuid == user_uuid
+        ).first()
         
-        # 서비스 토큰 레코드 생성
-        service_token = ServiceToken(
-            user_uuid=user_uuid,
-            quota_tokens=quota_tokens,
-            used_tokens=0.0,  # 초기값은 0으로 설정
-            token_expiry_date=subscription_end_date,
-            status='active'
-        )
+        # 구독 신규
+        if "NEW" == subscription_type: 
+
+            if existing_token:
+                logger.info(f"Found existing active service token for user {user_uuid} - deleting")
+                db.delete(existing_token)
+                db.commit()
+                logger.info("Existing token deleted successfully")
+            
+            # 서비스 토큰 레코드 생성
+            service_token = ServiceToken(
+                user_uuid=user_uuid,
+                quota_tokens=quota_tokens,
+                used_tokens=0.0,  # 초기값은 0으로 설정
+                token_expiry_date=subscription_end_date,
+                status='active'
+            )
+            
+            db.add(service_token)
+            db.commit()
+            db.refresh(service_token)
         
-        db.add(service_token)
-        db.commit()
-        db.refresh(service_token)
+        # 기존 구독
+        else :
+            
+            if existing_token:
+                # Get existing token
+                existing_token.quota_tokens = quota_tokens
+                existing_token.used_tokens = 0.0
+                existing_token.token_expiry_date = subscription_end_date
+                existing_token.status = "active"
+                existing_token.updated_at = datetime.now()
+                db.commit()
+                db.refresh(existing_token)
+
+            else :
+                # 서비스 토큰 레코드 생성
+                service_token = ServiceToken(
+                    user_uuid=user_uuid,
+                    quota_tokens=quota_tokens,
+                    used_tokens=0.0,  # 초기값은 0으로 설정
+                    token_expiry_date=subscription_end_date,
+                    status='active'
+                )
+                
+                db.add(service_token)
+                db.commit()
+                db.refresh(service_token)
+            
         
         # 구독 마스터 생성 (신규 구독)
         # subscription_end_date = subscription_start_date + timedelta(days=30)  # 1개월 후
@@ -2059,9 +2101,13 @@ def create_payment(
         
         if existing_subscription:
             # 기존 구독을 취소 상태로 변경
-            existing_subscription.subscription_status = 'cancelled'
-            existing_subscription.subscription_end_date = subscription_start_date
-            logger.info(f"⚠️ 기존 활성 구독 취소 - 구독ID: {existing_subscription.subscription_id}")
+            # existing_subscription.subscription_status = 'cancelled'
+            # existing_subscription.subscription_end_date = subscription_start_date
+            # logger.info(f"⚠️ 기존 활성 구독 취소 - 구독ID: {existing_subscription.subscription_id}")
+            logger.info(f"Found existing active Subscription Master for user {user_uuid} - deleting")
+            db.delete(existing_subscription)
+            db.commit()
+            logger.info("Existing token deleted successfully")
         
         # 구독 ID 생성
         import uuid
@@ -2084,15 +2130,12 @@ def create_payment(
             auto_renewal=True,
             renewal_plan_code=payment.plan_code
         )
-        
+
         db.add(new_subscription)
         db.commit()
         db.refresh(new_subscription)
         
-        
-        
         # 구독 변경 이력 생성 (신규 구독)
-        import uuid
         subscription_change = SubscriptionChangeHistory(
             user_uuid=user_uuid,
             subscription_id=new_subscription.subscription_id,
@@ -3942,7 +3985,8 @@ def get_monthly_billing_summary(
             status_code=500,
             detail=f"월빌링 요약 조회 중 오류가 발생했습니다: {str(e)}"
         )
-
+        
+# 현재 월 빌링 생성
 @app.post("/monthly-billing/current-month/generate", summary="현재 월 빌링 생성")
 def generate_current_month_billing(
     current_user: str = Depends(verify_token),

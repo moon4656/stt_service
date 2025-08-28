@@ -109,30 +109,106 @@ class TiroService(STTServiceInterface):
             if "translate_to" in kwargs:
                 params["translate_to"] = kwargs["translate_to"]
             
+            # API 요청 데이터 준비
+            request_data = {
+                "transcriptLocaleHints": ["EN_US"],
+                "translationLocales": ["KO_KR", "JA_JP"]
+            }
+            
             # API 요청
             logger.info(f"Tiro API 요청 시작: {filename}")
             response = requests.post(
-                f"{self.base_url}/voice/process",
-                headers=headers,
-                files=files,
-                params=params
+                f"{self.base_url}/v1/external/voice-file/jobs",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json=request_data
             )
+            
+            # Auth -> response ( id, uri )
+            # id, uri 파일 업로드
+            # id w
             
             processing_time = time.time() - start_time
             
             # 응답 처리
             if response.status_code == 200:
                 result = response.json()
+
+                logger.info(f"Tiro response id: {result.get('id')}, uploadUri : {result.get('uploadUri')}")
+                
+                # response 받고 
+                job_id = result.get('id')
+                uploadUri = result.get('uploadUri')
+                
+                # uploadUri에 파일 업로드
+                upload_response = self._upload_file_to_uri(uploadUri, file_content, filename)
+                if not upload_response:
+                    logger.error("파일 업로드 실패")
+                    return {
+                        "text": "",
+                        "confidence": 0.0,
+                        "audio_duration": 0.0,
+                        "language_code": language_code,
+                        "service_name": self.get_service_name(),
+                        "transcript_id": "",
+                        "full_response": {},
+                        "processing_time": processing_time,
+                        "error": "파일 업로드 실패"
+                    }
+
+                # upload complete 알림
+                complete_response = requests.put(
+                    f"https://api.tiro.ooo/v1/external/voice-file/jobs/{job_id}/upload-complete",
+                    headers={"Authorization": f"Bearer {self.api_key}"}
+                )
+                
+                if complete_response.status_code != 200:
+                    logger.error(f"업로드 완료 알림 실패: {complete_response.status_code}")
+                    return {
+                        "text": "",
+                        "confidence": 0.0,
+                        "audio_duration": 0.0,
+                        "language_code": language_code,
+                        "service_name": self.get_service_name(),
+                        "transcript_id": "",
+                        "full_response": {},
+                        "processing_time": processing_time,
+                        "error": "업로드 완료 알림 실패"
+                    }
+                
+                # 번역 결과 조회 (폴링)
+                translation_result = self._get_translation_result(job_id, max_retries=30)
+                if translation_result is None:
+                    logger.error("번역 결과 조회 실패")
+                    return {
+                        "text": "",
+                        "confidence": 0.0,
+                        "audio_duration": 0.0,
+                        "language_code": language_code,
+                        "service_name": self.get_service_name(),
+                        "transcript_id": job_id,
+                        "full_response": {},
+                        "processing_time": time.time() - start_time,
+                        "error": "번역 결과 조회 실패"
+                    }
+                
+                # 최종 처리 시간 계산
+                processing_time = time.time() - start_time
                 
                 # 결과 형식 변환
                 return {
-                    "text": result.get("text", ""),
-                    "confidence": result.get("confidence", 0.0),
-                    "audio_duration": result.get("audio_duration", 0.0),
-                    "language_code": result.get("detected_language", language_code),
+                    "text": translation_result.get("text", ""),
+                    "confidence": translation_result.get("confidence", 0.9),  # Tiro는 일반적으로 높은 신뢰도
+                    "audio_duration": translation_result.get("duration", 0.0),
+                    "language_code": "ko",  # 한국어로 번역된 결과
                     "service_name": self.get_service_name(),
-                    "transcript_id": result.get("id", ""),
-                    "full_response": result,
+                    "transcript_id": job_id,
+                    "full_response": {
+                        "job_response": result,
+                        "translation_response": translation_result
+                    },
                     "processing_time": processing_time,
                     "error": None
                 }
@@ -166,3 +242,85 @@ class TiroService(STTServiceInterface):
                 "processing_time": processing_time,
                 "error": error_message
             }
+    
+    def _upload_file_to_uri(self, upload_uri: str, file_content: bytes, filename: str) -> bool:
+        """
+        주어진 URI에 파일을 업로드합니다.
+        
+        Args:
+            upload_uri: 업로드할 URI
+            file_content: 파일 내용 (바이트)
+            filename: 파일명
+            
+        Returns:
+            bool: 업로드 성공 여부
+        """
+        try:
+            files = {
+                "file": (filename, file_content)
+            }
+            
+            response = requests.put(
+                upload_uri,
+                files=files
+            )
+            
+            if response.status_code in [200, 201, 204]:
+                logger.info(f"파일 업로드 성공: {filename}")
+                return True
+            else:
+                logger.error(f"파일 업로드 실패: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"파일 업로드 중 예외 발생: {str(e)}")
+            return False
+    
+    def _get_translation_result(self, job_id: str, max_retries: int = 30) -> Dict[str, Any]:
+        """
+        번역 결과를 조회합니다 (폴링 방식).
+        
+        Args:
+            job_id: 작업 ID
+            max_retries: 최대 재시도 횟수
+            
+        Returns:
+            Dict[str, Any]: 번역 결과 또는 None
+        """
+        import time
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    f"https://api.tiro.ooo/v1/external/voice-file/jobs/{job_id}/translations/KO_KR",
+                    headers={"Authorization": f"Bearer {self.api_key}"}
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    # 번역이 완료되었는지 확인
+                    if result.get("status") == "completed" or result.get("text"):
+                        logger.info(f"번역 결과 조회 성공: {job_id}")
+                        return result
+                    else:
+                        logger.info(f"번역 진행 중... (시도 {attempt + 1}/{max_retries})")
+                        time.sleep(2)  # 2초 대기
+                        continue
+                        
+                elif response.status_code == 404:
+                    logger.info(f"번역 작업 대기 중... (시도 {attempt + 1}/{max_retries})")
+                    time.sleep(2)
+                    continue
+                    
+                else:
+                    logger.error(f"번역 결과 조회 오류: {response.status_code} - {response.text}")
+                    time.sleep(2)
+                    continue
+                    
+            except Exception as e:
+                logger.error(f"번역 결과 조회 중 예외 발생: {str(e)}")
+                time.sleep(2)
+                continue
+        
+        logger.error(f"번역 결과 조회 최대 재시도 횟수 초과: {job_id}")
+        return None
