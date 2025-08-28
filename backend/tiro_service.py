@@ -15,9 +15,13 @@ class TiroService(STTServiceInterface):
     
     def __init__(self):
         self.api_key = os.getenv("TIRO_API_KEY")
-        self.base_url = "https://api.tiro-ooo.dev"
+        self.base_url = "https://api.tiro-ooo.dev/v1/external/voice-file"
         self.supported_formats = ["mp3", "wav", "m4a", "flac", "ogg"]
         self.max_file_size = 100 * 1024 * 1024  # 100MB
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }        
     
     def is_configured(self) -> bool:
         """
@@ -90,131 +94,32 @@ class TiroService(STTServiceInterface):
         start_time = time.time()
         
         try:
-            # 파일 업로드 및 변환 요청
-            headers = {
-                "Authorization": f"Bearer {self.api_key}"
-            }
+            # 언어 설정
+            transcript_locale_hints = None
+            translation_locales = None
             
-            # 파일 업로드
-            files = {
-                "file": (filename, file_content)
-            }
+            if language_code == "ko":
+                transcript_locale_hints = ["ko_KR"]
+            elif language_code == "en":
+                transcript_locale_hints = ["en_US"]
+            else:
+                transcript_locale_hints = ["ko_KR"]  # 기본값
             
-            # 요청 파라미터 설정
-            params = {
-                "language": language_code
-            }
-            
-            # 추가 옵션 처리
+            # 번역 옵션 처리
             if "translate_to" in kwargs:
-                params["translate_to"] = kwargs["translate_to"]
+                translation_locales = [kwargs["translate_to"]]
             
-            # API 요청 데이터 준비
-            request_data = {
-                "transcriptLocaleHints": ["EN_US"],
-                "translationLocales": ["KO_KR", "JA_JP"]
-            }
-            
-            # API 요청
-            logger.info(f"Tiro API 요청 시작: {filename}")
-            response = requests.post(
-                f"{self.base_url}/v1/external/voice-file/jobs",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json=request_data
+            # 완전한 워크플로우 실행
+            results = self.process_audio_file_from_bytes(
+                file_content=file_content,
+                filename=filename,
+                transcript_locale_hints=transcript_locale_hints,
+                translation_locales=translation_locales
             )
-            
-            # Auth -> response ( id, uri )
-            # id, uri 파일 업로드
-            # id w
             
             processing_time = time.time() - start_time
             
-            # 응답 처리
-            if response.status_code == 200:
-                result = response.json()
-
-                logger.info(f"Tiro response id: {result.get('id')}, uploadUri : {result.get('uploadUri')}")
-                
-                # response 받고 
-                job_id = result.get('id')
-                uploadUri = result.get('uploadUri')
-                
-                # uploadUri에 파일 업로드
-                upload_response = self._upload_file_to_uri(uploadUri, file_content, filename)
-                if not upload_response:
-                    logger.error("파일 업로드 실패")
-                    return {
-                        "text": "",
-                        "confidence": 0.0,
-                        "audio_duration": 0.0,
-                        "language_code": language_code,
-                        "service_name": self.get_service_name(),
-                        "transcript_id": "",
-                        "full_response": {},
-                        "processing_time": processing_time,
-                        "error": "파일 업로드 실패"
-                    }
-
-                # upload complete 알림
-                complete_response = requests.put(
-                    f"https://api.tiro.ooo/v1/external/voice-file/jobs/{job_id}/upload-complete",
-                    headers={"Authorization": f"Bearer {self.api_key}"}
-                )
-                
-                if complete_response.status_code != 200:
-                    logger.error(f"업로드 완료 알림 실패: {complete_response.status_code}")
-                    return {
-                        "text": "",
-                        "confidence": 0.0,
-                        "audio_duration": 0.0,
-                        "language_code": language_code,
-                        "service_name": self.get_service_name(),
-                        "transcript_id": "",
-                        "full_response": {},
-                        "processing_time": processing_time,
-                        "error": "업로드 완료 알림 실패"
-                    }
-                
-                # 번역 결과 조회 (폴링)
-                translation_result = self._get_translation_result(job_id, max_retries=30)
-                if translation_result is None:
-                    logger.error("번역 결과 조회 실패")
-                    return {
-                        "text": "",
-                        "confidence": 0.0,
-                        "audio_duration": 0.0,
-                        "language_code": language_code,
-                        "service_name": self.get_service_name(),
-                        "transcript_id": job_id,
-                        "full_response": {},
-                        "processing_time": time.time() - start_time,
-                        "error": "번역 결과 조회 실패"
-                    }
-                
-                # 최종 처리 시간 계산
-                processing_time = time.time() - start_time
-                
-                # 결과 형식 변환
-                return {
-                    "text": translation_result.get("text", ""),
-                    "confidence": translation_result.get("confidence", 0.9),  # Tiro는 일반적으로 높은 신뢰도
-                    "audio_duration": translation_result.get("duration", 0.0),
-                    "language_code": "ko",  # 한국어로 번역된 결과
-                    "service_name": self.get_service_name(),
-                    "transcript_id": job_id,
-                    "full_response": {
-                        "job_response": result,
-                        "translation_response": translation_result
-                    },
-                    "processing_time": processing_time,
-                    "error": None
-                }
-            else:
-                error_message = f"Tiro API 오류: {response.status_code} - {response.text}"
-                logger.error(error_message)
+            if "error" in results:
                 return {
                     "text": "",
                     "confidence": 0.0,
@@ -224,8 +129,37 @@ class TiroService(STTServiceInterface):
                     "transcript_id": "",
                     "full_response": {},
                     "processing_time": processing_time,
-                    "error": error_message
+                    "error": results["error"]
                 }
+            
+            # 결과 추출
+            transcript_text = ""
+            confidence = 0.9
+            job_id = ""
+            
+            if "transcript" in results:
+                transcript_data = results["transcript"]
+                transcript_text = transcript_data.get("text", "")
+                job_id = transcript_data.get("id", "")
+            
+            # 번역 결과가 있으면 번역 텍스트 사용
+            if "translations" in results and results["translations"]:
+                for translation in results["translations"]:
+                    if translation.get("text"):
+                        transcript_text = translation.get("text", transcript_text)
+                        break
+            
+            return {
+                "text": transcript_text,
+                "confidence": confidence,
+                "audio_duration": 0.0,  # Tiro API에서 제공하지 않음
+                "language_code": language_code,
+                "service_name": self.get_service_name(),
+                "transcript_id": job_id,
+                "full_response": results,
+                "processing_time": processing_time,
+                "error": None
+            }
                 
         except Exception as e:
             processing_time = time.time() - start_time
@@ -243,84 +177,200 @@ class TiroService(STTServiceInterface):
                 "error": error_message
             }
     
-    def _upload_file_to_uri(self, upload_uri: str, file_content: bytes, filename: str) -> bool:
+    def create_job(self, transcript_locale_hints=None, translation_locales=None):
         """
-        주어진 URI에 파일을 업로드합니다.
+        Tiro API에서 새로운 작업을 생성합니다.
         
         Args:
-            upload_uri: 업로드할 URI
-            file_content: 파일 내용 (바이트)
-            filename: 파일명
+            transcript_locale_hints: 전사 언어 힌트 리스트
+            translation_locales: 번역 언어 리스트
             
         Returns:
-            bool: 업로드 성공 여부
+            dict: 작업 생성 응답
         """
-        try:
-            files = {
-                "file": (filename, file_content)
-            }
+        payload = {}
+        
+        if transcript_locale_hints:
+            payload["transcriptLocaleHints"] = transcript_locale_hints[:1]
             
-            response = requests.put(
-                upload_uri,
-                files=files
-            )
-            
-            if response.status_code in [200, 201, 204]:
-                logger.info(f"파일 업로드 성공: {filename}")
-                return True
-            else:
-                logger.error(f"파일 업로드 실패: {response.status_code} - {response.text}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"파일 업로드 중 예외 발생: {str(e)}")
-            return False
+        if translation_locales:
+            payload["translationLocales"] = translation_locales[:5]
+        
+        response = requests.post(
+            f"{self.base_url}/jobs",
+            headers=self.headers,
+            json=payload
+        )
+        response.raise_for_status()
+        return response.json()
     
-    def _get_translation_result(self, job_id: str, max_retries: int = 30) -> Dict[str, Any]:
+    def upload_file_from_bytes(self, upload_uri: str, file_content: bytes, filename: str):
         """
-        번역 결과를 조회합니다 (폴링 방식).
+        바이트 데이터를 사용하여 파일을 업로드합니다.
+        
+        Args:
+            upload_uri: 업로드 URI
+            file_content: 파일 바이트 데이터
+            filename: 파일명
+        """
+        response = requests.put(upload_uri, data=file_content)
+        response.raise_for_status()
+        logger.info(f"File uploaded successfully: {filename}")
+    
+    def notify_upload_complete(self, job_id: str):
+        """
+        업로드 완료를 알립니다.
         
         Args:
             job_id: 작업 ID
-            max_retries: 최대 재시도 횟수
+        """
+        response = requests.put(
+            f"{self.base_url}/jobs/{job_id}/upload-complete",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        logger.info(f"Upload complete notification sent for job: {job_id}")
+    
+    def poll_job_status(self, job_id: str, max_wait_time: int = 600) -> str:
+        """
+        작업 상태를 폴링합니다.
+        
+        Args:
+            job_id: 작업 ID
+            max_wait_time: 최대 대기 시간 (초)
             
         Returns:
-            Dict[str, Any]: 번역 결과 또는 None
+            str: 최종 작업 상태
         """
-        import time
+        interval = 1
+        max_interval = 10
+        elapsed_time = 0
         
-        for attempt in range(max_retries):
+        success_statuses = ["TRANSLATION_COMPLETED", "TRANSCRIPT_COMPLETED"]
+        failure_statuses = ["FAILED"]
+        
+        while elapsed_time < max_wait_time:
+            response = requests.get(
+                f"{self.base_url}/jobs/{job_id}",
+                headers=self.headers
+            )
+            response.raise_for_status()
+            
+            job_data = response.json()
+            status = job_data.get("status")
+            
+            logger.info(f"Job {job_id} status: {status} (elapsed: {elapsed_time}s)")
+            
+            if status in success_statuses:
+                logger.info(f"Job completed successfully with status: {status}")
+                return status
+            elif status in failure_statuses:
+                logger.error(f"Job failed with status: {status}")
+                return status
+            
+            time.sleep(interval)
+            elapsed_time += interval
+            
+            # 지수 백오프 적용
+            interval = min(interval * 2, max_interval)
+        
+        logger.warning(f"Polling timeout after {max_wait_time} seconds")
+        return "TIMEOUT"
+    
+    def get_transcript(self, job_id: str) -> dict:
+        """
+        전사 결과를 가져옵니다.
+        
+        Args:
+            job_id: 작업 ID
+            
+        Returns:
+            dict: 전사 결과
+        """
+        response = requests.get(
+            f"{self.base_url}/jobs/{job_id}/transcript",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def get_translations(self, job_id: str) -> list:
+        """
+        번역 결과를 가져옵니다.
+        
+        Args:
+            job_id: 작업 ID
+            
+        Returns:
+            list: 번역 결과 리스트
+        """
+        response = requests.get(
+            f"{self.base_url}/jobs/{job_id}/translations",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def process_audio_file_from_bytes(
+        self, 
+        file_content: bytes, 
+        filename: str,
+        transcript_locale_hints: Optional[List[str]] = None, 
+        translation_locales: Optional[List[str]] = None
+    ) -> dict:
+        """
+        바이트 데이터로부터 완전한 오디오 처리 워크플로우를 실행합니다.
+        
+        Args:
+            file_content: 오디오 파일 바이트 데이터
+            filename: 파일명
+            transcript_locale_hints: 전사 언어 힌트
+            translation_locales: 번역 언어 리스트
+            
+        Returns:
+            dict: 전사 및 번역 결과
+        """
+        logger.info(f"Starting audio processing for: {filename}")
+        
+        try:
+            # Step 1: 작업 생성
+            job_response = self.create_job(transcript_locale_hints, translation_locales)
+            job_id = job_response["id"]
+            upload_uri = job_response["uploadUri"]
+            
+            logger.info(f"Job created: {job_id}")
+            
+            # Step 2: 파일 업로드
+            self.upload_file_from_bytes(upload_uri, file_content, filename)
+            
+            # Step 3: 업로드 완료 알림
+            self.notify_upload_complete(job_id)
+            
+            # Step 4: 완료 대기
+            final_status = self.poll_job_status(job_id)
+            
+            if final_status not in ["TRANSCRIPT_COMPLETED", "TRANSLATION_COMPLETED"]:
+                return {"error": f"Job failed with status: {final_status}"}
+            
+            # Step 5: 결과 수집
+            results = {}
+            
             try:
-                response = requests.get(
-                    f"https://api.tiro.ooo/v1/external/voice-file/jobs/{job_id}/translations/KO_KR",
-                    headers={"Authorization": f"Bearer {self.api_key}"}
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    # 번역이 완료되었는지 확인
-                    if result.get("status") == "completed" or result.get("text"):
-                        logger.info(f"번역 결과 조회 성공: {job_id}")
-                        return result
-                    else:
-                        logger.info(f"번역 진행 중... (시도 {attempt + 1}/{max_retries})")
-                        time.sleep(2)  # 2초 대기
-                        continue
-                        
-                elif response.status_code == 404:
-                    logger.info(f"번역 작업 대기 중... (시도 {attempt + 1}/{max_retries})")
-                    time.sleep(2)
-                    continue
-                    
-                else:
-                    logger.error(f"번역 결과 조회 오류: {response.status_code} - {response.text}")
-                    time.sleep(2)
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"번역 결과 조회 중 예외 발생: {str(e)}")
-                time.sleep(2)
-                continue
-        
-        logger.error(f"번역 결과 조회 최대 재시도 횟수 초과: {job_id}")
-        return None
+                transcript = self.get_transcript(job_id)
+                results["transcript"] = transcript
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error getting transcript: {e}")
+            
+            if translation_locales:
+                try:
+                    translations = self.get_translations(job_id)
+                    results["translations"] = translations
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Error getting translations: {e}")
+            
+            return results
+            
+        except Exception as e:
+            error_message = f"Audio processing failed: {str(e)}"
+            logger.error(error_message)
+            return {"error": error_message}
