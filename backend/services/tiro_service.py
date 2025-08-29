@@ -3,7 +3,7 @@ import requests
 import time
 import json
 from typing import Dict, Any, List, Optional
-from stt_service_interface import STTServiceInterface
+from .stt_service_interface import STTServiceInterface
 import logging
 
 logger = logging.getLogger(__name__)

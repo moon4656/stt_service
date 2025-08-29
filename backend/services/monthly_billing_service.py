@@ -6,7 +6,7 @@ from sqlalchemy import func, and_, or_
 import uuid
 import logging
 
-from app import get_last_day_of_month
+from ..core.app import get_last_day_of_month
 from database import (
     MonthlyBilling, TokenUsageHistory, ServiceToken, SubscriptionMaster,
     Payment, SubscriptionPayment, OveragePayment, SubscriptionPlan,

@@ -1,10 +1,10 @@
 from typing import Dict, Any, List, Optional
-from stt_service_interface import STTServiceInterface
-from assemblyai_service import AssemblyAIService
-from daglo_service import DagloService
-from fast_whisper_service import FastWhisperService
-from deepgram_service import DeepgramService
-from tiro_service import TiroService
+from .stt_service_interface import STTServiceInterface
+from .assemblyai_service import AssemblyAIService
+from .daglo_service import DagloService
+from .fast_whisper_service import FastWhisperService
+from .deepgram_service import DeepgramService
+from .tiro_service import TiroService
 import logging
 
 logger = logging.getLogger(__name__)

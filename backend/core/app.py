@@ -19,7 +19,7 @@ from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from datetime import datetime, date
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
-from auth import (
+from backend.core.auth import (
     TokenManager, 
     create_user, 
     get_user, 
@@ -31,12 +31,12 @@ from auth import (
     hash_password,
     verify_password
 )
-from database import get_db, create_tables, test_connection, TranscriptionRequest, TranscriptionResponse, APIUsageLog, LoginLog, APIToken, SubscriptionPlan, Payment, SubscriptionPayment, TokenPayment, OveragePayment, ServiceToken, TokenUsageHistory, User, SubscriptionMaster, SubscriptionChangeHistory
-from db_service import TranscriptionService, APIUsageService
-from openai_service import OpenAIService
-from stt_manager import STTManager
-from audio_utils import get_audio_duration, format_duration
-from file_storage import save_uploaded_file, get_stored_file_path, file_storage_manager
+from backend.core.database import get_db, create_tables, test_connection, TranscriptionRequest, TranscriptionResponse, APIUsageLog, LoginLog, APIToken, SubscriptionPlan, Payment, SubscriptionPayment, TokenPayment, OveragePayment, ServiceToken, TokenUsageHistory, User, SubscriptionMaster, SubscriptionChangeHistory
+from backend.core.db_service import TranscriptionService, APIUsageService
+from backend.services.openai_service import OpenAIService
+from backend.services.stt_manager import STTManager
+from backend.utils.audio_utils import get_audio_duration, format_duration
+from backend.core.file_storage import save_uploaded_file, get_stored_file_path, file_storage_manager
 # Get last day of month
 from calendar import monthrange
 from datetime import datetime, timedelta
@@ -4105,4 +4105,4 @@ if __name__ == "__main__":
     # 로깅 레벨을 DEBUG로 설정하여 더 자세한 로그 확인
     logging.basicConfig(level=logging.DEBUG)
 
-    uvicorn.run("app:app", host="0.0.0.0", port=8001, reload=False, log_level="debug")
+    uvicorn.run("backend.core.app:app", host="0.0.0.0", port=8000, reload=False, log_level="debug")

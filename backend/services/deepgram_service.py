@@ -4,7 +4,7 @@ import time
 import json
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
-from stt_service_interface import STTServiceInterface
+from .stt_service_interface import STTServiceInterface
 import logging
 
 load_dotenv()
