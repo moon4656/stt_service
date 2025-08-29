@@ -643,6 +643,7 @@ class SubscriptionMaster(Base):
     unit_price = Column(Integer, nullable=False, comment="단가")  # 단가
     quantity = Column(Integer, nullable=False, default=1, comment="인원수")  # 인원수
     amount = Column(Integer, nullable=False, comment="금액")  # 금액
+    quota_tokens = Column(Integer, nullable=False, default=0, comment="구독할당토큰")  # 구독할당토큰
     subscription_status = Column(String(20), nullable=False, default='active', comment="구독상태")  # 구독 상태 (active, suspended, cancelled, expired)
 
     # 구독 기간

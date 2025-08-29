@@ -6,6 +6,7 @@ from sqlalchemy import func, and_, or_
 import uuid
 import logging
 
+from app import get_last_day_of_month
 from database import (
     MonthlyBilling, TokenUsageHistory, ServiceToken, SubscriptionMaster,
     Payment, SubscriptionPayment, OveragePayment, SubscriptionPlan,
@@ -27,6 +28,7 @@ class MonthlyBillingService:
         self.db = db
         self.kst = timezone(timedelta(hours=9))  # 한국 시간대
     
+    # 월빌링 생성
     def generate_monthly_billing(self, target_year: int, target_month: int) -> Dict[str, any]:
         """월빌링 생성 - 지정된 년월의 모든 사용자에 대한 월빌링을 생성합니다.
         
@@ -47,6 +49,8 @@ class MonthlyBillingService:
             else:
                 billing_end = date(target_year, target_month + 1, 1) - timedelta(days=1)
             
+            logger.info(f"✅ 청구 기간: {billing_start} ~ {billing_end}")
+            
             # 활성 구독이 있는 모든 사용자 조회
             active_subscriptions = self.db.query(SubscriptionMaster).filter(
                 SubscriptionMaster.subscription_status == 'active'
@@ -55,11 +59,17 @@ class MonthlyBillingService:
             created_billings = []
             
             for subscription in active_subscriptions:
+                
+                logger.info(f" subscription loop: user_uuid={subscription.user_uuid}, plan_id={subscription.plan_code}")
                 try:
                     # 사용자별 월빌링 생성
+                    logger.info(f" subscription: user_uuid={subscription.user_uuid}, {target_year}, {target_month}, {billing_start}, {billing_end}")
                     billing = self._create_user_monthly_billing(
                         subscription, target_year, target_month, billing_start, billing_end
                     )
+                    
+                    logger.info(f"✅ 사용자 {billing} ")
+                    
                     if billing:
                         created_billings.append(billing)
                         
@@ -90,8 +100,10 @@ class MonthlyBillingService:
             raise
     
     def _create_user_monthly_billing(self, subscription: SubscriptionMaster, 
-                                   target_year: int, target_month: int,
-                                   billing_start: date, billing_end: date) -> Optional[MonthlyBilling]:
+                                   target_year: int, 
+                                   target_month: int,
+                                   billing_start: date, 
+                                   billing_end: date) -> Optional[MonthlyBilling]:
         """사용자별 월빌링 생성
         
         Args:
@@ -105,6 +117,8 @@ class MonthlyBillingService:
             생성된 월빌링 객체 또는 None
         """
         user_uuid = subscription.user_uuid
+
+        logger.info(f" 🔍 사용자 {user_uuid}의 {target_year}년 {target_month}월 월빌링 생성 시작")
         
         # 이미 해당 월 빌링이 존재하는지 확인
         existing_billing = self.db.query(MonthlyBilling).filter(
@@ -131,8 +145,26 @@ class MonthlyBillingService:
         # 월별 사용량 집계
         usage_stats = self._calculate_monthly_usage(user_uuid, billing_start, billing_end)
         
+        logger.info(f"✅ 사용자 {user_uuid} 월별 사용량 집계: {usage_stats}")
+        
+        # Get subscription quota tokens from service_tokens
+        service_token = self.db.query(ServiceToken).filter(
+            ServiceToken.user_uuid == user_uuid
+        ).first()
+        
+        if not service_token:
+            logger.warning(f"⚠️ No service token found for user {user_uuid}")
+            quota_tokens = 0
+        else:
+            logger.info(f" service_token.quota_tokens: {service_token.quota_tokens}")
+            quota_tokens = float(service_token.quota_tokens or 0)
+
+        logger.info(f" service_token.quota_tokens: {service_token.quota_tokens}, quota_tokens: {quota_tokens}")
+            
+        logger.info(f"✅ User {user_uuid} quota tokens: {quota_tokens} usage_stats['total_minutes']: {usage_stats['total_minutes']}")
+        
         # 초과 사용량 계산
-        excess_minutes = max(0, usage_stats['total_minutes'] - float(plan.included_minutes or 0))
+        excess_minutes = max(0, usage_stats['total_minutes'] - quota_tokens)
         
         # 요금 계산
         base_fee = subscription.amount  # 기본 구독료
@@ -148,7 +180,7 @@ class MonthlyBillingService:
             billing_month=target_month,
             plan_code=subscription.plan_code,
             total_minutes_used=usage_stats['total_minutes'],
-            included_minutes=float(plan.included_minutes or 0),
+            included_minutes=quota_tokens,
             excess_minutes=excess_minutes,
             total_requests=usage_stats['total_requests'],
             base_subscription_fee=base_fee,
@@ -160,11 +192,14 @@ class MonthlyBillingService:
             total_billing_amount=total_amount,
             billing_status='pending',
             payment_due_date=billing_end + timedelta(days=30),  # 청구서 발행 후 30일
+            paid_at=datetime.now(self.kst),
             billing_period_start=billing_start,
             billing_period_end=billing_end
         )
         
         self.db.add(billing)
+        
+        logger.info(f"📊 _create_user_monthly_billing ---------------------------------------------------1")
         
         # 초과 사용량이 있는 경우 초과 결제 처리
         if excess_minutes > 0:
@@ -173,10 +208,10 @@ class MonthlyBillingService:
         logger.info(f"📊 사용자 {user_uuid} 월빌링 생성 - 총액: {total_amount:,}원 (초과: {excess_fee:,}원)")
         return billing
     
+    # 월별 사용량월별 사용량 집계 집계
     def _calculate_monthly_usage(self, user_uuid: str, start_date: date, end_date: date) -> Dict[str, float]:
         """월별 사용량 집계
-        
-        
+        /
         Args:
             user_uuid: 사용자 UUID
             start_date: 집계 시작일
@@ -205,6 +240,7 @@ class MonthlyBillingService:
             'total_requests': total_requests
         }
     
+    # 초과 사용량 결제 처리
     def _process_overage_payment(self, user_uuid: str, plan_code: str, 
                                excess_minutes: float, excess_fee: int) -> None:
         """초과 사용량 결제 처리
@@ -266,7 +302,9 @@ class MonthlyBillingService:
             생성 결과 딕셔너리
         """
         logger.info(f"🚀 월구독결제 생성 시작 - {target_year}년 {target_month}월")
-        
+
+        last_day = get_last_day_of_month(target_year, target_month)        
+       
         try:
             # 활성 구독 조회
             active_subscriptions = self.db.query(SubscriptionMaster).filter(
@@ -277,13 +315,19 @@ class MonthlyBillingService:
             
             for subscription in active_subscriptions:
                 try:
-                    # 구독 결제 생성
+                    # 결제, 구독결제상세 생성
                     payment_result = self._create_subscription_payment(subscription, target_year, target_month)
                     if payment_result:
                         created_payments.append(payment_result)
                         
                         # 서비스 토큰 초기화
-                        self._reset_service_tokens(subscription.user_uuid, subscription.plan_code)
+                        self._reset_service_tokens(subscription, last_day)
+                        
+                        # 구독 마스터 업데이트
+                        subscription.subscription_status = 'active'
+                        subscription.subscription_start_date = datetime(target_year, target_month, 1)
+                        subscription.subscription_end_date = last_day 
+                        subscription.next_billing_date = last_day + timedelta(days=1)
                         
                 except Exception as e:
                     logger.error(f"❌ 사용자 {subscription.user_uuid} 구독결제 생성 실패: {str(e)}")
@@ -360,7 +404,7 @@ class MonthlyBillingService:
             logger.error(f"❌ 구독결제 생성 실패: {str(e)}")
             return None
     
-    def _reset_service_tokens(self, user_uuid: str, plan_code: str) -> None:
+    def _reset_service_tokens(self, subscription: SubscriptionMaster, last_day: date) -> None:
         """서비스 토큰 초기화 - 월 구독 결제 후 토큰을 리셋합니다.
         
         Args:
@@ -370,37 +414,40 @@ class MonthlyBillingService:
         try:
             # 요금제 정보 조회
             plan = self.db.query(SubscriptionPlan).filter(
-                SubscriptionPlan.plan_code == plan_code
+                SubscriptionPlan.plan_code == subscription.plan_code
             ).first()
             
             if not plan:
-                logger.error(f"❌ 요금제 {plan_code}를 찾을 수 없습니다.")
+                logger.error(f"❌ 요금제 {subscription.plan_code}를 찾을 수 없습니다.")
                 return
             
             # 기존 서비스 토큰 조회
             service_token = self.db.query(ServiceToken).filter(
-                ServiceToken.user_uuid == user_uuid
+                ServiceToken.user_uuid == subscription.user_uuid
             ).first()
+            
+            quota_tokens = plan.monthly_service_tokens *subscription.quantity
             
             if service_token:
                 # 기존 토큰 업데이트
-                service_token.quota_tokens = Decimal(str(plan.included_minutes or 0))
+                service_token.quota_tokens = Decimal(str(quota_tokens or 0))
                 service_token.used_tokens = Decimal('0.0')
-                service_token.token_expiry_date = date.today() + timedelta(days=30)  # 30일 후 만료
+                service_token.token_expiry_date = last_day
                 service_token.status = 'active'
                 service_token.updated_at = datetime.now(self.kst)
+            
             else:
                 # 새 토큰 생성
                 service_token = ServiceToken(
-                    user_uuid=user_uuid,
-                    quota_tokens=Decimal(str(plan.included_minutes or 0)),
+                    user_uuid=subscription.user_uuid,
+                    quota_tokens=Decimal(str(quota_tokens or 0)),
                     used_tokens=Decimal('0.0'),
-                    token_expiry_date=date.today() + timedelta(days=30),
+                    token_expiry_date=last_day,
                     status='active'
                 )
                 self.db.add(service_token)
             
-            logger.info(f"🔄 서비스토큰 초기화 - 사용자: {user_uuid}, 할당토큰: {plan.included_minutes}분")
+            logger.info(f"🔄 서비스토큰 초기화 - 사용자: {subscription.user_uuid}, 할당토큰: {quota_tokens}분")
             
         except Exception as e:
             logger.error(f"❌ 서비스토큰 초기화 실패: {str(e)}")
@@ -482,18 +529,32 @@ def create_subscription_payments_for_current_month(db: Session) -> Dict[str, any
     now = datetime.now(service.kst)
     return service.create_monthly_subscription_billing(now.year, now.month)
 
-
+def get_last_day_of_month(year: int, month: int) -> date:
+    """Get the last day of the given year and month
+    
+    Args:
+        year: Target year
+        month: Target month
+        
+    Returns:
+        Date object representing the last day of month
+    """
+    if month == 12:
+        return date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        return date(year, month + 1, 1) - timedelta(days=1)
 # 사용 예시
 if __name__ == "__main__":
     # 데이터베이스 세션 생성
+    """
     from database import SessionLocal
     
     db = SessionLocal()
     try:
         # 월빌링 서비스 생성
-        billing_service = MonthlyBillingService(db)
+        # service = MonthlyBillingService(db)
         
-        # 현재 월 빌링 생성
+        # 현재 월 빌링 생성 create_monthly_billing_for_current_month
         result = create_monthly_billing_for_current_month(db)
         print(f"월빌링 생성 결과: {result}")
         
@@ -503,3 +564,4 @@ if __name__ == "__main__":
         
     finally:
         db.close()
+    """

@@ -493,10 +493,14 @@ async def transcribe_audio(
                 file_size=file_size,
                 service_requested=service,
                 fallback_enabled=fallback,
-                duration=duration
+                duration=duration,
+                client_ip=request.client.host,
+                user_agent=request.headers.get("user-agent", "")
             )
+
             logger.info(f"✅ 요청 기록 생성 완료 - ID: {request_record.request_id}")
-            print(f"✅ Created request record with ID: {request_record.request_id}")
+            logger.info(f"✅ Created request record with ID: {request_record.request_id}")
+            logger.info(f"✅ Created request record with client_ip: {request_record.client_ip}")
                 
         except Exception as db_error:
             logger.error(f"❌ 요청 기록 생성 실패: {db_error}")
@@ -667,6 +671,11 @@ async def transcribe_audio(
                 
                 # STT 시간 + 요약 시간을 분 단위로 계산
                 audio_duration_minutes = round(total_processing_time / 60, 2)
+                
+                if duration_seconds == 0:
+                    duration_seconds = duration
+
+                logger.info(f' duration_seconds 1: {duration_seconds}')
                 
                 # 토큰 사용량 계산 (1분당 1점)
                 # tokens_used = round(audio_duration_minutes * 1.0, 2)
@@ -2123,6 +2132,7 @@ def create_payment(
             unit_price=unit_price,
             quantity=payment.quantity,
             amount=supply_amount,
+            quota_tokens=quota_tokens,
             subscription_status='active',
             subscription_start_date=subscription_start_date,
             subscription_end_date=subscription_end_date,
@@ -3989,7 +3999,7 @@ def get_monthly_billing_summary(
 # 현재 월 빌링 생성
 @app.post("/monthly-billing/current-month/generate", summary="현재 월 빌링 생성")
 def generate_current_month_billing(
-    current_user: str = Depends(verify_token),
+    # current_user: str = Depends(verify_token),
     db: Session = Depends(get_db)
 ) -> MonthlyBillingResponse:
     """
@@ -4001,10 +4011,12 @@ def generate_current_month_billing(
     3. 초과 사용량 처리
     """
     try:
-        logger.info(f"🚀 현재 월 빌링 생성 API 호출 - 사용자: {current_user}")
+
+        from monthly_billing_service import create_monthly_billing_for_current_month
+
+        # logger.info(f"🚀 현재 월 빌링 생성 API 호출 - 사용자: {current_user}")
         
         # 현재 월 빌링 생성
-        from monthly_billing_service import create_monthly_billing_for_current_month
         result = create_monthly_billing_for_current_month(db)
         
         logger.info(f"✅ 현재 월 빌링 생성 API 완료 - 생성건수: {result.get('created_count', 0)}건")
@@ -4025,7 +4037,7 @@ def generate_current_month_billing(
 
 @app.post("/monthly-billing/current-month/subscription-payments", summary="현재 월 구독결제 생성")
 def create_current_month_subscription_payments(
-    current_user: str = Depends(verify_token),
+    # current_user: str = Depends(verify_token),
     db: Session = Depends(get_db)
 ) -> MonthlyBillingResponse:
     """
@@ -4037,7 +4049,7 @@ def create_current_month_subscription_payments(
     3. 서비스 토큰 할당량 초기화
     """
     try:
-        logger.info(f"🚀 현재 월 구독결제 생성 API 호출 - 사용자: {current_user}")
+        # logger.info(f"🚀 현재 월 구독결제 생성 API 호출 - 사용자: {current_user}")
         
         # 현재 월 구독결제 생성
         from monthly_billing_service import create_subscription_payments_for_current_month
@@ -4058,6 +4070,8 @@ def create_current_month_subscription_payments(
             status_code=500,
             detail=f"현재 월 구독결제 생성 중 오류가 발생했습니다: {str(e)}"
         )
+
+
 
 def get_last_day_of_month(year: int, month: int) -> int:
     """
