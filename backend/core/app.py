@@ -40,6 +40,8 @@ from backend.core.file_storage import save_uploaded_file, get_stored_file_path, 
 # Get last day of month
 from calendar import monthrange
 from datetime import datetime, timedelta
+from backend.services.monthly_billing_service import create_subscription_payments_for_current_month
+from backend.services.monthly_billing_service import MonthlyBillingService
 
 # 환경 변수 로드
 load_dotenv()
@@ -3875,7 +3877,6 @@ def generate_monthly_billing(
         logger.info(f"🚀 월빌링 생성 API 호출 - 사용자: {current_user}, 대상: {request.target_year}년 {request.target_month}월")
         
         # 월빌링 서비스 초기화
-        from monthly_billing_service import MonthlyBillingService
         billing_service = MonthlyBillingService(db)
         
         # 월빌링 생성
@@ -3922,7 +3923,6 @@ def create_monthly_subscription_payments(
         logger.info(f"🚀 월구독결제 생성 API 호출 - 사용자: {current_user}, 대상: {request.target_year}년 {request.target_month}월")
         
         # 월빌링 서비스 초기화
-        from monthly_billing_service import MonthlyBillingService
         billing_service = MonthlyBillingService(db)
         
         # 월구독결제 생성
@@ -3971,7 +3971,6 @@ def get_monthly_billing_summary(
         logger.info(f"🔍 월빌링 요약 조회 API 호출 - 사용자: {current_user}, 대상: {target_year}년 {target_month}월")
         
         # 월빌링 서비스 초기화
-        from monthly_billing_service import MonthlyBillingService
         billing_service = MonthlyBillingService(db)
         
         # 월빌링 요약 조회
@@ -4052,7 +4051,6 @@ def create_current_month_subscription_payments(
         # logger.info(f"🚀 현재 월 구독결제 생성 API 호출 - 사용자: {current_user}")
         
         # 현재 월 구독결제 생성
-        from monthly_billing_service import create_subscription_payments_for_current_month
         result = create_subscription_payments_for_current_month(db)
         
         logger.info(f"✅ 현재 월 구독결제 생성 API 완료 - 생성건수: {result.get('created_count', 0)}건")

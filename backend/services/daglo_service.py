@@ -3,7 +3,7 @@ import requests
 import time
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
-from .stt_service_interface import STTServiceInterface
+from backend.services.stt_service_interface import STTServiceInterface
 
 load_dotenv()
 
