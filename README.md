@@ -42,7 +42,7 @@
    
    # 패키지 설치
    python.exe -m pip install --upgrade pip
-   cd backend 
+   cd backend/config
    pip install -r requirements.txt
    ```
 

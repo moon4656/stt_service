@@ -8,8 +8,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import json
 import os
 from sqlalchemy.orm import Session
-# 절대 경로로 import 수정
-from backend.core.database import User, APIToken, get_db
+# 상대 경로로 import 수정
+from database import User, APIToken, get_db
 import bcrypt
 
 # JWT 설정

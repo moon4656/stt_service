@@ -6,8 +6,24 @@ from sqlalchemy import func, and_, or_
 import uuid
 import logging
 
-from ..core.app import get_last_day_of_month
-from database import (
+from calendar import monthrange
+
+def get_last_day_of_month(year: int, month: int) -> int:
+    """
+    Get the last day of specified month
+    Args:
+        year: Year (e.g. 2024)
+        month: Month (1-12)
+    Returns:
+        Last day of month (28-31)
+    """
+    return monthrange(year, month)[1]
+import sys
+import os
+
+# 상위 디렉토리를 경로에 추가하여 절대 경로 임포트가 가능하도록 함
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.database import (
     MonthlyBilling, TokenUsageHistory, ServiceToken, SubscriptionMaster,
     Payment, SubscriptionPayment, OveragePayment, SubscriptionPlan,
     User, get_db
