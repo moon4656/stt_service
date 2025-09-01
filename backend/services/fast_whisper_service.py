@@ -3,7 +3,7 @@ import tempfile
 import os
 import time
 import logging
-from backend.services.stt_service_interface import STTServiceInterface
+from .stt_service_interface import STTServiceInterface
 
 try:
     import faster_whisper

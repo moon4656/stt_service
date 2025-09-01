@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from backend.core.database import TranscriptionRequest, TranscriptionResponse, APIUsageLog
+from database import TranscriptionRequest, TranscriptionResponse, APIUsageLog
 from typing import Optional, Dict, List
 import json
 import time
