@@ -1,0 +1,247 @@
+{
+  "auth": {
+    "agree": "동의합니다",
+    "createAccount": "계정 생성",
+    "createNewAccount": "새 계정 만들기",
+    "email": "이메일",
+    "login": "로그인",
+    "password": "비밀번호",
+    "recover_password": "비밀번호 복구",
+    "sign_up": "회원가입",
+    "keep_logged_in": "로그인 상태 유지",
+    "termsOfUse": "이용약관",
+    "reset_password": "비밀번호 재설정"
+  },
+  "404": {
+    "title": "페이지를 찾을 수 없습니다.",
+    "text": "문제가 있다고 생각되시면 다음 주소로 메시지를 보내주세요: ",
+    "back_button": "대시보드로 돌아가기"
+  },
+  "typography": {
+    "primary": "기본 텍스트 스타일",
+    "secondary": "보조 텍스트 스타일"
+  },
+  "dashboard": {
+    "versions": "버전",
+    "setupRemoteConnections": "원격 연결 설정",
+    "currentVisitors": "현재 방문자",
+    "navigationLayout": "네비게이션 레이아웃",
+    "topBarButton": "상단 바",
+    "sideBarButton": "사이드 바"
+  },
+  "language": {
+    "brazilian_portuguese": "포르투갈어",
+    "english": "영어",
+    "spanish": "스페인어",
+    "simplified_chinese": "중국어 간체",
+    "persian": "페르시아어",
+    "korean": "한국어"
+  },
+  "menu": {
+    "auth": "인증",
+    "buttons": "버튼",
+    "timelines": "타임라인",
+    "dashboard": "대시보드",
+    "billing": "결제",
+    "login": "로그인",
+    "preferences": "계정 설정",
+    "payments": "결제 내역",
+    "settings": "애플리케이션 설정",
+    "pricing-plans": "요금제",
+    "payment-methods": "결제 수단",
+    "signup": "회원가입",
+    "recover-password": "비밀번호 복구",
+    "recover-password-email": "비밀번호 복구 이메일",
+    "404": "404",
+    "faq": "자주 묻는 질문",
+    "users": "사용자",
+    "projects": "프로젝트",
+    "tokens": "API 토큰"
+  },
+  "messages": {
+    "all": "모든 메시지 보기",
+    "new": "{name}님의 새 메시지",
+    "mark_as_read": "읽음으로 표시"
+  },
+  "navbar": {
+    "messageUs": "웹 개발 문의:",
+    "repository": "GitHub 저장소"
+  },
+  "notifications": {
+    "all": "모든 알림 보기",
+    "less": "알림 줄이기",
+    "mark_as_read": "읽음으로 표시",
+    "sentMessage": "메시지를 보냈습니다",
+    "uploadedZip": "{type}이 포함된 새 Zip 파일을 업로드했습니다",
+    "startedTopic": "새 주제를 시작했습니다"
+  },
+  "user": {
+    "language": "언어 변경",
+    "logout": "로그아웃",
+    "profile": "프로필",
+    "settings": "설정",
+    "billing": "결제",
+    "faq": "자주 묻는 질문",
+    "helpAndSupport": "도움말 및 지원",
+    "projects": "프로젝트",
+    "account": "계정",
+    "explore": "탐색"
+  },
+  "treeView": {
+    "basic": "기본",
+    "icons": "아이콘",
+    "selectable": "선택 가능",
+    "editable": "편집 가능",
+    "advanced": "고급"
+  },
+  "chat": {
+    "title": "채팅",
+    "sendButton": "전송"
+  },
+  "spacingPlayground": {
+    "value": "값",
+    "margin": "여백",
+    "padding": "패딩"
+  },
+  "spacing": {
+    "title": "간격"
+  },
+  "cards": {
+    "cards": "카드",
+    "fixed": "고정",
+    "floating": "플로팅",
+    "contentText": "얼룩말의 독특한 줄무늬는 사람들에게 가장 친숙한 동물 중 하나입니다.",
+    "contentTextLong": "얼룩말의 독특한 줄무늬는 사람들에게 가장 친숙한 동물 중 하나입니다. 초원, 사바나, 삼림지, 가시덤불, 산악지대, 해안 언덕 등 다양한 서식지에서 발견됩니다. 다양한 인위적 요인들이 얼룩말 개체수에 심각한 영향을 미쳤으며, 특히 가죽을 위한 사냥과 서식지 파괴가 주요 원인입니다. 그레비 얼룩말과 산악 얼룩말은 멸종 위기에 처해 있습니다. 평원 얼룩말은 훨씬 더 많지만, 한 아종인 콰가는 이미 멸종되었습니다.",
+    "rowHeight": "행 높이",
+    "title": {
+      "default": "기본",
+      "withControls": "컨트롤 포함",
+      "customHeader": "사용자 정의 헤더",
+      "withoutHeader": "헤더 없음",
+      "withImage": "이미지 포함",
+      "withTitleOnImage": "이미지 위 제목",
+      "withCustomTitleOnImage": "이미지 위 사용자 정의 제목",
+      "withStripe": "스트라이프 포함",
+      "withBackground": "배경 포함"
+    },
+    "button": {
+      "main": "메인",
+      "cancel": "취소",
+      "showMore": "더 보기",
+      "readMore": "더 읽기"
+    },
+    "link": {
+      "edit": "편집",
+      "setAsDefault": "기본값으로 설정",
+      "delete": "삭제",
+      "traveling": "여행",
+      "france": "프랑스",
+      "review": "리뷰",
+      "feedback": "피드백 남기기",
+      "readFull": "전체 기사 읽기",
+      "secondaryAction": "보조 작업",
+      "action1": "작업 1",
+      "action2": "작업 2"
+    }
+  },
+  "colors": {
+    "themeColors": "테마 색상",
+    "extraColors": "추가 색상",
+    "gradients": {
+      "basic": {
+        "title": "버튼 그라데이션"
+      },
+      "hovered": {
+        "title": "호버 버튼 그라데이션",
+        "text": "호버 상태를 위해 원본 스타일(그라데이션 또는 단색)에 15% 밝게 적용됩니다."
+      },
+      "pressed": {
+        "title": "눌림 버튼 그라데이션",
+        "text": "눌림 상태를 위해 원본 스타일(그라데이션 또는 단색)에 15% 어둡게 적용됩니다."
+      }
+    }
+  },
+  "tabs": {
+    "alignment": "탭 정렬",
+    "overflow": "탭 오버플로우",
+    "hidden": "숨겨진 슬라이더가 있는 탭",
+    "grow": "탭 확장"
+  },
+  "helpAndSupport": "도움말 및 지원",
+  "aboutVuesticAdmin": "Vuestic Admin 소개",
+  "supportAndConsulting": "지원 및 컨설팅",
+  "search": {
+    "placeholder": "검색..."
+  },
+  "buttonSelect": {
+    "dark": "다크",
+    "light": "라이트"
+  },
+  "vuestic": {
+    "search": "검색",
+    "noOptions": "항목을 찾을 수 없습니다",
+    "ok": "확인",
+    "cancel": "취소",
+    "uploadFile": "파일 업로드",
+    "undo": "실행 취소",
+    "dropzone": "업로드할 파일을 여기에 드롭하세요",
+    "fileDeleted": "파일이 삭제되었습니다",
+    "closeAlert": "알림 닫기",
+    "backToTop": "맨 위로",
+    "toggleDropdown": "드롭다운 토글",
+    "carousel": "캐러셀",
+    "goPreviousSlide": "이전 슬라이드로",
+    "goNextSlide": "다음 슬라이드로",
+    "goSlide": "{index}번째 슬라이드로",
+    "slideOf": "{length}개 중 {index}번째 슬라이드",
+    "close": "닫기",
+    "openColorPicker": "색상 선택기 열기",
+    "colorSelection": "색상 선택",
+    "colorName": "색상 {color}",
+    "decreaseCounter": "카운터 감소",
+    "increaseCounter": "카운터 증가",
+    "selectAllRows": "모든 행 선택",
+    "sortColumnBy": "{name}으로 열 정렬",
+    "selectRowByIndex": "{index}번째 행 선택",
+    "resetDate": "날짜 재설정",
+    "nextPeriod": "다음 기간",
+    "switchView": "보기 전환",
+    "previousPeriod": "이전 기간",
+    "removeFile": "파일 제거",
+    "reset": "재설정",
+    "pagination": "페이지네이션",
+    "goToTheFirstPage": "첫 번째 페이지로",
+    "goToPreviousPage": "이전 페이지로",
+    "goToSpecificPage": "{page} 페이지로",
+    "goToSpecificPageInput": "이동할 페이지 번호를 입력하세요",
+    "goNextPage": "다음 페이지로",
+    "goLastPage": "마지막 페이지로",
+    "currentRating": "현재 평점 {max}점 중 {value}점",
+    "voteRating": "{max}점 중 {value}점으로 평가",
+    "optionsFilter": "옵션 필터",
+    "splitPanels": "분할 패널",
+    "movePaginationLeft": "페이지네이션 왼쪽으로 이동",
+    "movePaginationRight": "페이지네이션 오른쪽으로 이동",
+    "resetTime": "시간 재설정",
+    "closeToast": "토스트 닫기",
+    "selectedOption": "선택된 옵션",
+    "noSelectedOption": "옵션이 선택되지 않았습니다",
+    "breadcrumbs": "브레드크럼",
+    "counterValue": "카운터 값",
+    "selectedDate": "선택된 날짜",
+    "selectedTime": "선택된 시간",
+    "progressState": "진행 상태",
+    "color": "색상",
+    "next": "다음",
+    "back": "이전",
+    "finish": "완료",
+    "step": "단계",
+    "progress": "진행률",
+    "loading": "로딩 중",
+    "sliderValue": "현재 슬라이더 값은 {value}입니다",
+    "switch": "스위치",
+    "inputField": "입력 필드",
+    "fileTypeIncorrect": "파일 형식이 올바르지 않습니다",
+    "select": "옵션을 선택하세요"
+  }
+}

@@ -2,7 +2,7 @@ import requests
 import hashlib
 
 # 서버 URL
-BASE_URL = "http://localhost:8001"
+BASE_URL = "http://localhost:8000"
 
 def test_api_key_verification():
     """API 키 검증 테스트"""

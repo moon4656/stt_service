@@ -7,7 +7,7 @@ def create_api_key():
     테스트용 API 키를 생성합니다.
     """
     import random
-    BASE_URL = "http://localhost:8001"
+    BASE_URL = "http://localhost:8000"
     
     # 사용자 로그인
     login_data = {

@@ -2,7 +2,7 @@ import requests
 import json
 
 # 서버 URL
-BASE_URL = "http://localhost:8001"
+BASE_URL = "http://localhost:8000"
 
 def create_and_test_api_key():
     """새로운 API 키 생성 및 테스트"""
