@@ -2,7 +2,7 @@ import requests
 import json
 
 # 서버 URL
-base_url = "http://localhost:8001"
+base_url = "http://localhost:8000"
 
 # 테스트 데이터 - A01 user_type 사용
 test_user = {

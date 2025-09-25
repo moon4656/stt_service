@@ -2,7 +2,7 @@ import requests
 import json
 
 # 서버 URL
-BASE_URL = "http://localhost:8001"
+BASE_URL = "http://localhost:8000"
 
 def test_login_with_correct_password():
     """올바른 패스워드로 로그인 테스트"""
