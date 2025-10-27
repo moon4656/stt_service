@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import json
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from .stt_service_interface import STTServiceInterface
@@ -40,6 +41,8 @@ class DagloService(STTServiceInterface):
         file_content: bytes, 
         filename: str, 
         language_code: str = "ko",
+        speaker_diarization_enable: bool = False,
+        speaker_count_hint: Optional[int] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -48,15 +51,39 @@ class DagloService(STTServiceInterface):
         Args:
             file_content: 음성 파일의 바이트 데이터
             filename: 파일명
-            language_code: 언어 코드
+            language_code: 언어 코드 (기본값: "ko")
+            speaker_diarization_enable: 화자 분리 활성화 여부 (기본값: True)
+            speaker_count_hint: 예상 화자 수 힌트 (선택사항, 기본값: None)
             **kwargs: 추가 옵션
-            
+                
         Returns:
             Dict[str, Any]: 변환 결과
+            
+        Raises:
+            Exception: STT 변환 실패 시
         """
         start_time = time.time()
         
         try:
+            # 화자 분리 옵션 처리
+            speaker_diarization_enable = kwargs.get("speaker_diarization_enable", speaker_diarization_enable)
+            speaker_diarization_enable = bool(speaker_diarization_enable)
+            speaker_count_hint = kwargs.get("speaker_count_hint", speaker_count_hint)
+            try:
+                speaker_count_hint = int(speaker_count_hint) if speaker_count_hint is not None else None
+            except (TypeError, ValueError):
+                speaker_count_hint = None
+
+            stt_config: Dict[str, Any] = {}
+            if speaker_diarization_enable:
+                speaker_diarization_config = {"enable": True}
+                if isinstance(speaker_count_hint, int) and speaker_count_hint > 0:
+                    speaker_diarization_config["speakerCountHint"] = speaker_count_hint
+                stt_config["speakerDiarization"] = speaker_diarization_config
+                print(f"🎤 화자 분리 설정 활성화: {json.dumps(stt_config, ensure_ascii=False)}")
+            else:
+                print("🎤 화자 분리 설정 비활성화")
+            
             # 파일 확장자 추출
             file_extension = filename.split('.')[-1].lower()
             
@@ -70,8 +97,13 @@ class DagloService(STTServiceInterface):
                 "file": (filename, file_content, f"audio/{file_extension}")
             }
             
+            # 추가 설정(sttConfig)을 폼 데이터에 포함
+            post_kwargs: Dict[str, Any] = {"headers": headers, "files": files}
+            if stt_config:
+                post_kwargs["data"] = {"sttConfig": json.dumps(stt_config)}
+            
             # 1단계: Daglo API에 음성 파일 업로드
-            response = requests.post(self.base_url, headers=headers, files=files)
+            response = requests.post(self.base_url, **post_kwargs)
             
             if response.status_code != 200:
                 raise Exception(f"Daglo API 오류: {response.status_code} - {response.text}")

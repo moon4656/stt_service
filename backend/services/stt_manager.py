@@ -156,6 +156,11 @@ class STTManager:
                 "error": f"서비스 '{service_name}'를 찾을 수 없습니다."
             }
         
+        # Daglo 서비스의 화자 분리(diarization) 옵션을 명시적으로 활성화
+        if service_name == "daglo":
+            kwargs.setdefault("speaker_diarization_enable", True)
+            kwargs.setdefault("speaker_count_hint", 3)
+        
         return service.transcribe_file(
             file_content=file_content,
             filename=filename,

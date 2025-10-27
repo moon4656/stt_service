@@ -33,9 +33,9 @@
    python -m venv venv
    
    # 가상환경 활성화 (Windows)
-   # venv\Scripts\activate
-   python -m venv venv
-   /venv/Scripts/Activate.ps1
+   venv\Scripts\activate
+   # python -m venv venv
+   # /venv/Scripts/Activate.ps1
    
    # 가상환경 활성화 (macOS/Linux)
    # source venv/bin/activate
@@ -262,7 +262,7 @@ stt_storage/
 - taskkill /f /pid <PID>
 
 # uvicorn 서버 실행
-- uvicorn app:app --host 0.0.0.0 --port 8001 --reload
+- uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
 # 1단계: Git 상태 확인
 - git status
@@ -282,6 +282,14 @@ stt_storage/
 # Personal Access Token 사용 
 - git remote set-url origin https://[moonsoo-dx]:[TOKEN]@github.com/moonsoo-dx/stt_service.git
 
+# PostgreSQL 외부 연결 설정
+- pg_hba.conf
+  host    all 수정
+  host    replication
+- postgresql.conf
+  listen_addresses = '*'
+- Windows 인바운드규칙 - 포트 설정
+- 서비스 - postgresql  재기동
 
 
 MIT
