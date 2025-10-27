@@ -7,7 +7,7 @@ def create_api_key():
     """
     새로운 API 키 생성
     """
-    BASE_URL = "http://localhost:8001"
+    BASE_URL = "http://localhost:8000"
     
     # 1. 사용자 로그인 (JWT 토큰 획득)
     login_data = {

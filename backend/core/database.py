@@ -27,9 +27,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./stt_service.db")
 
 # SQLAlchemy 엔진 생성
 if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, echo=True, echo_pool=True)
 else:
-    engine = create_engine(DATABASE_URL)
+    engine = create_engine(DATABASE_URL, echo=True, echo_pool=True)
     
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -55,6 +55,10 @@ class User(Base):
     phone_number = Column(String(20), nullable=True, comment="전화번호")  # 사용자 전화번호 (선택사항)
     password_hash = Column(String(255), nullable=False, comment="비밀번호해시")  # 해시화된 패스워드 (bcrypt 등)
     is_active = Column(Boolean, default=True, comment="활성화상태")  # 계정 활성화 상태 (비활성화시 로그인 불가)
+    failed_login_attempts = Column(Integer, default=0, comment="로그인실패횟수")  # 연속 로그인 실패 횟수
+    is_locked = Column(Boolean, default=False, comment="계정잠금상태")  # 계정 잠금 상태
+    locked_at = Column(DateTime(timezone=True), nullable=True, comment="잠금시간")  # 계정 잠금 시간
+    last_failed_login = Column(DateTime(timezone=True), nullable=True, comment="마지막실패로그인시간")  # 마지막 실패 로그인 시간
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="생성일시")  # 계정 생성 시간
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="수정일시")  # 계정 정보 최종 수정 시간
 
@@ -170,6 +174,7 @@ class APIToken(Base):
     id = Column(Integer, primary_key=True, index=True, comment="API토큰일련번호")  # API 토큰 고유 식별자 (자동 증가)
     user_uuid = Column(String(36), nullable=False, index=True, comment="사용자고유식별자")  # 토큰 소유자의 사용자 UUID (User.user_uuid 참조)
     token_id = Column(String(100), unique=True, nullable=False, index=True, comment="토큰식별자")  # 토큰 고유 식별자 (중복 불가)
+    description = Column(String(4000), nullable=True, comment="상세정보")  # 토큰 상세 정보 (사용자가 식별을 위해 지정, 선택사항)
     token_name = Column(String(100), nullable=True, comment="토큰명")  # 토큰 이름 (사용자가 식별을 위해 지정, 선택사항)
     token_key = Column(String(255), nullable=False, comment="토큰키해시값")  # 실제 API 키 해시값 (보안을 위해 해시화되어 저장)
     api_key = Column(String(255), nullable=False, comment="API키")  # 신규 컬럼: 평문 API 키
