@@ -41,7 +41,7 @@ class DagloService(STTServiceInterface):
         file_content: bytes, 
         filename: str, 
         language_code: str = "ko",
-        speaker_diarization_enable: bool = False,
+        speaker_diarization_enable: bool = True,
         speaker_count_hint: Optional[int] = None,
         **kwargs
     ) -> Dict[str, Any]:
